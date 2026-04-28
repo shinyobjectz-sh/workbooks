@@ -1,0 +1,44 @@
+{
+  "name": "@signal/workbook-runtime",
+  "version": "0.1.0",
+  "description": "Signal Workbook UI runtime — Svelte 5 components that render the workbook block tree. Used both by apps/web (live mode) and embedded in exported .workbook files (CDN/inline mode).",
+  "type": "module",
+  "license": "MIT",
+  "repository": "https://github.com/shinyobjectz/shinymono",
+  "exports": {
+    ".": {
+      "svelte": "./src/index.ts",
+      "types": "./src/index.ts"
+    },
+    "./Workbook.svelte": {
+      "svelte": "./src/Workbook.svelte"
+    },
+    "./blocks/*": {
+      "svelte": "./src/blocks/*"
+    },
+    "./workbookContext": {
+      "svelte": "./src/workbookContext.ts",
+      "types": "./src/workbookContext.ts"
+    }
+  },
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "svelte-check --tsconfig ./tsconfig.json",
+    "dev": "vite build --watch"
+  },
+  "peerDependencies": {
+    "@shinymono/shared": "*",
+    "svelte": "^5.0.0",
+    "convex-svelte": "*"
+  },
+  "peerDependenciesMeta": {
+    "convex-svelte": { "optional": true }
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "svelte": "^5.0.0",
+    "svelte-check": "^4.0.0",
+    "typescript": "^5.9.3",
+    "vite": "^6.0.0"
+  }
+}
