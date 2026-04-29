@@ -113,6 +113,9 @@ export interface WorkbookRuntimeWasm {
   initRuntime: (req: { workbook_slug: string; environment: Environment }) => InitRuntimeResponse;
   runRhai?: (source: string) => CellOutput[];
   runPolarsSql?: (sql: string, csv: string) => CellOutput[];
+  runChart?: (spec_json: string) => CellOutput[];
+  candleSmokeTest?: () => CellOutput[];
+  linfaSmokeTest?: () => CellOutput[];
   pauseRuntime?: (req: { runtime_id: string }) => null;
   destroyRuntime?: (req: { runtime_id: string }) => null;
 }
@@ -198,6 +201,29 @@ export function createRuntimeClient(opts: RuntimeClientOptions): RuntimeClient {
         const sql = req.cell.source ?? "";
         const csv = (req.params?.csv as string | undefined) ?? "";
         const outputs = await runDuckdbSql(sql, csv);
+        return { outputs };
+      }
+
+      if (lang === "candle-inference") {
+        // P4.1: scaffold dispatch. Today the smoke-test path proves
+        // Candle is alive in the WASM bundle. Real model loading goes
+        // through @workbook/runtime/modelArtifactResolver and lands as
+        // P4.1+ work — for now this confirms the dispatcher is wired.
+        if (!wasm.candleSmokeTest) {
+          throw new Error("runtime built without candle feature");
+        }
+        const outputs = wasm.candleSmokeTest();
+        return { outputs };
+      }
+
+      if (lang === "linfa-train") {
+        // P4.4: scaffold dispatch. Smoke-test path fits a 1-feature
+        // linear regression to prove Linfa is alive. Real dataset-driven
+        // training (with the workbook data layer) lands incrementally.
+        if (!wasm.linfaSmokeTest) {
+          throw new Error("runtime built without linfa feature");
+        }
+        const outputs = wasm.linfaSmokeTest();
         return { outputs };
       }
 
