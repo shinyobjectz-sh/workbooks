@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>workbook-runtime: csv-explore (P2.5 gate)</title>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      max-width: 960px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+      line-height: 1.5;
+    }
+    h1 { margin-top: 0; }
+    .panel { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1rem 0; }
+    .panel > div > label { display: block; font-weight: 600; margin-bottom: 0.25rem; }
+    textarea {
+      width: 100%;
+      height: 12rem;
+      font-family: ui-monospace, monospace;
+      font-size: 13px;
+      padding: 0.5rem;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    button {
+      padding: 0.5rem 1rem;
+      cursor: pointer;
+      font-size: 14px;
+      background: #111;
+      color: white;
+      border: 0;
+      border-radius: 4px;
+    }
+    button:disabled { opacity: 0.5; cursor: wait; }
+    pre { background: #f5f5f5; padding: 1rem; border-radius: 4px; overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; font-size: 13px; }
+    th, td { border: 1px solid #ddd; padding: 0.4rem 0.6rem; text-align: left; }
+    th { background: #f5f5f5; font-weight: 600; }
+    .meta { color: #666; font-size: 0.875rem; }
+    .err { color: #c0392b; background: #fdecea; padding: 1rem; border-radius: 4px; white-space: pre-wrap; }
+    .timing { color: #999; font-size: 12px; margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+  <h1>workbook-runtime: csv-explore</h1>
+  <p class="meta">
+    P2.5 gate — proves Polars compiles to WASM <em>and</em> actually
+    executes in a real browser. The CSV is parsed into a LazyFrame,
+    registered as the SQL table <code>data</code>, and the SQL query
+    runs against it. The result is rendered back to CSV by Polars and
+    parsed for display below.
+  </p>
+
+  <div class="panel">
+    <div>
+      <label for="csv">CSV input (table = <code>data</code>)</label>
+      <textarea id="csv">name,region,revenue,churn
+acme,us,12000,0.04
+beta,us,8400,0.11
+contoso,eu,15600,0.02
+delta,eu,3200,0.18
+echo,us,9800,0.07
+foxtrot,apac,21000,0.05
+golf,apac,4400,0.22</textarea>
+    </div>
+    <div>
+      <label for="sql">SQL (Polars SQL frontend)</label>
+      <textarea id="sql">SELECT
+  region,
+  COUNT(*) AS customers,
+  SUM(revenue) AS total_revenue,
+  AVG(churn) AS avg_churn
+FROM data
+GROUP BY region
+ORDER BY total_revenue DESC</textarea>
+    </div>
+  </div>
+
+  <button id="run">Run query</button>
+  <span id="timing" class="timing"></span>
+
+  <h3>Result</h3>
+  <div id="out">(not yet run)</div>
+
+  <h3 style="margin-top: 2rem;">Build info</h3>
+  <pre id="info">loading…</pre>
+
+  <script type="module">
+    import init, { runPolarsSql, build_info } from "../../pkg/workbook_runtime.js";
+
+    const t0 = performance.now();
+    await init();
+    const t1 = performance.now();
+    const coldStartMs = Math.round(t1 - t0);
+
+    document.getElementById("info").textContent = JSON.stringify(
+      { ...build_info(), cold_start_ms: coldStartMs },
+      null, 2,
+    );
+
+    const out = document.getElementById("out");
+    const timing = document.getElementById("timing");
+    const button = document.getElementById("run");
+
+    button.addEventListener("click", async () => {
+      const sql = document.getElementById("sql").value;
+      const csv = document.getElementById("csv").value;
+      button.disabled = true;
+      timing.textContent = "running…";
+      try {
+        const start = performance.now();
+        const outputs = runPolarsSql(sql, csv);
+        const ms = (performance.now() - start).toFixed(2);
+        timing.textContent = `${ms}ms`;
+        renderOutputs(outputs);
+      } catch (e) {
+        out.innerHTML = "";
+        const div = document.createElement("div");
+        div.className = "err";
+        div.textContent = String(e);
+        out.appendChild(div);
+        timing.textContent = "(failed)";
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    function renderOutputs(outputs) {
+      out.innerHTML = "";
+      for (const output of outputs) {
+        if (output.kind === "Text" && output.mime_type === "text/csv") {
+          out.appendChild(csvToTable(output.content));
+        } else if (output.kind === "Error") {
+          const div = document.createElement("div");
+          div.className = "err";
+          div.textContent = output.message + (output.traceback ? "\n\n" + output.traceback : "");
+          out.appendChild(div);
+        } else {
+          const pre = document.createElement("pre");
+          pre.textContent = JSON.stringify(output, null, 2);
+          out.appendChild(pre);
+        }
+      }
+    }
+
+    function csvToTable(csv) {
+      const rows = csv.trim().split("\n").map((r) => parseCsvRow(r));
+      const table = document.createElement("table");
+      const thead = document.createElement("thead");
+      const headerRow = document.createElement("tr");
+      for (const cell of rows[0]) {
+        const th = document.createElement("th");
+        th.textContent = cell;
+        headerRow.appendChild(th);
+      }
+      thead.appendChild(headerRow);
+      table.appendChild(thead);
+      const tbody = document.createElement("tbody");
+      for (let i = 1; i < rows.length; i++) {
+        const tr = document.createElement("tr");
+        for (const cell of rows[i]) {
+          const td = document.createElement("td");
+          td.textContent = cell;
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      return table;
+    }
+
+    function parseCsvRow(row) {
+      // Naive CSV row parse — handles quoted fields. Polars renders CSV
+      // with double-quotes around fields containing commas, so this is
+      // sufficient for our output.
+      const out = [];
+      let cur = "";
+      let inQ = false;
+      for (let i = 0; i < row.length; i++) {
+        const ch = row[i];
+        if (ch === '"') { inQ = !inQ; continue; }
+        if (ch === "," && !inQ) { out.push(cur); cur = ""; continue; }
+        cur += ch;
+      }
+      out.push(cur);
+      return out;
+    }
+  </script>
+</body>
+</html>
