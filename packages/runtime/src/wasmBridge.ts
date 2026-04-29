@@ -26,6 +26,11 @@
  * they wire it in their own runtime client.
  */
 
+import {
+  createSqliteDispatcher,
+  type SqliteDispatcher,
+} from "./sqliteSidecar";
+
 // Minimal Cell + Environment + CellOutput shapes that match the proto in
 // `proto/workbook/v1/workbook.proto`. Hand-rolled until P2.5 wires up
 // generated bindings via buf. Once that lands, replace these with the
@@ -162,6 +167,10 @@ export interface RuntimeClientOptions {
  */
 export function createRuntimeClient(opts: RuntimeClientOptions): RuntimeClient {
   let wasmPromise: Promise<WorkbookRuntimeWasm> | null = null;
+  // Lazy SQLite sidecar — only constructed when a sqlite cell dispatches.
+  // We don't import the dispatcher module eagerly so workbooks that
+  // never use sqlite never pay the @sqlite.org/sqlite-wasm load cost.
+  let sqlite: SqliteDispatcher | null = null;
 
   function ensureWasm(): Promise<WorkbookRuntimeWasm> {
     if (!wasmPromise) {
@@ -217,23 +226,36 @@ export function createRuntimeClient(opts: RuntimeClientOptions): RuntimeClient {
       }
 
       if (lang === "sqlite") {
-        // The SQLite engine is a JS-side sidecar (@sqlite.org/sqlite-wasm),
-        // not a Rust-bundled feature. Dispatcher lazy-loads on first hit
-        // and accepts a database file via reads= → <wb-data mime=
-        // "application/x-sqlite3">. Wiring lands in a follow-up commit
-        // alongside the sidecar integration.
-        const hasDbBytes =
-          !!req.params &&
-          !!req.cell.dependsOn?.some((d) => req.params?.[d] instanceof Uint8Array);
-        throw new Error(
-          hasDbBytes
-            ? "sqlite cell dispatcher not yet wired — database bytes are " +
-                "available via reads= but the @sqlite.org/sqlite-wasm sidecar " +
-                "isn't integrated yet"
-            : "sqlite cells require a `reads=` reference to a " +
-                "<wb-data mime=\"application/x-sqlite3\"> block holding the " +
-                "database bytes",
-        );
+        // SQLite is a JS-side sidecar (@sqlite.org/sqlite-wasm), not a
+        // Rust-bundled feature. We pull the database bytes from a
+        // `<wb-data mime="application/x-sqlite3">` referenced via reads=.
+        let dataId: string | null = null;
+        let dbBytes: Uint8Array | null = null;
+        if (req.params && req.cell.dependsOn) {
+          for (const dep of req.cell.dependsOn) {
+            const v = req.params[dep];
+            if (v instanceof Uint8Array) {
+              dataId = dep;
+              dbBytes = v;
+              break;
+            }
+          }
+        }
+        if (!dbBytes || !dataId) {
+          throw new Error(
+            "sqlite cells require a `reads=` reference to a " +
+              "<wb-data mime=\"application/x-sqlite3\"> block holding the " +
+              "database bytes",
+          );
+        }
+        if (!sqlite) sqlite = createSqliteDispatcher();
+        const outputs = await sqlite.exec({
+          workbookSlug: req.runtimeId || "default",
+          dataId,
+          dbBytes,
+          sql: req.cell.source ?? "",
+        });
+        return { outputs };
       }
 
       // duckdb dispatch removed (core-0id.7). Polars-SQL covers analytical
@@ -325,6 +347,10 @@ export function createRuntimeClient(opts: RuntimeClientOptions): RuntimeClient {
     async destroyRuntime(runtimeId) {
       const wasm = await ensureWasm();
       wasm.destroyRuntime?.({ runtime_id: runtimeId });
+      if (sqlite) {
+        sqlite.dispose();
+        sqlite = null;
+      }
     },
 
     async buildInfo() {

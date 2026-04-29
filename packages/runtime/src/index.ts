@@ -179,6 +179,13 @@ export type {
   WorkbookDataResolverOptions,
 } from "./workbookDataResolver";
 
+// SQLite cell dispatcher — JS-side sidecar around @sqlite.org/sqlite-wasm.
+// Hosts that need to evict cached DB handles (e.g. on workbook unmount)
+// import the dispatcher type and call dispose(). The runtime client wires
+// it lazily — workbooks without sqlite cells never load the package.
+export { createSqliteDispatcher } from "./sqliteSidecar";
+export type { SqliteDispatcher } from "./sqliteSidecar";
+
 // Worker-isolated runtime client (core-0id.6) — wraps the in-page WASM
 // client in a Worker with a wall-clock budget. On overrun the Worker is
 // terminated and respawned, killing runaway Polars / Linfa / Candle cells
