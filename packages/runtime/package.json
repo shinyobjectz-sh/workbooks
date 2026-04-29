@@ -98,6 +98,10 @@
       "types": "./src/workbookHistoryResolver.ts",
       "default": "./src/workbookHistoryResolver.ts"
     },
+    "./autosave": {
+      "types": "./src/autosave.ts",
+      "default": "./src/autosave.ts"
+    },
     "./sqliteSidecar": {
       "types": "./src/sqliteSidecar.ts",
       "default": "./src/sqliteSidecar.ts"

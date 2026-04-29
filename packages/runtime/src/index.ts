@@ -211,6 +211,13 @@ export type {
   LoroPathStep,
 } from "./loroSidecar";
 
+// Autosave helpers — exportWorkbookHtml walks <wb-doc>/<wb-memory>/
+// <wb-history> elements and writes their current bytes back into the
+// HTML; installAutosave wraps that in a debounced loop hosts can drive
+// via markDirty() / flush().
+export { exportWorkbookHtml, installAutosave } from "./autosave";
+export type { AutosaveOptions, AutosaveHandle } from "./autosave";
+
 // Workbook history resolver — content-addressed Merkle commit chain
 // of the workbook itself. Parser + types are live; the Prolly Tree
 // reader is backed by the Rust+WASM Prolly Tree primitive in
