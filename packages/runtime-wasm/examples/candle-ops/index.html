@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>workbook-runtime: Candle ops (T1.1)</title>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      max-width: 880px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+      line-height: 1.5;
+    }
+    .meta { color: #666; font-size: 0.875rem; }
+    .controls { display: flex; gap: 1rem; align-items: center; margin: 1rem 0; }
+    label { font-weight: 600; }
+    input[type="number"] { padding: 0.4rem; width: 6rem; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; }
+    button { padding: 0.5rem 1rem; cursor: pointer; font-size: 14px; background: #111; color: white; border: 0; border-radius: 4px; }
+    button:disabled { opacity: 0.5; cursor: wait; }
+    .panel {
+      border: 1px solid #ddd; border-radius: 6px; padding: 0.75rem 1rem; margin: 0.75rem 0;
+    }
+    .panel h3 { margin: 0 0 0.5rem 0; font-size: 14px; font-family: ui-monospace, monospace; }
+    .timing-pair { display: flex; gap: 2rem; align-items: baseline; }
+    .timing-pair .label { font-size: 12px; color: #666; min-width: 4.5rem; }
+    .timing-pair .ms { font-family: ui-monospace, monospace; font-size: 14px; font-weight: 600; }
+    .timing-pair .speedup { font-size: 12px; color: #888; }
+    .speedup.ok { color: #27ae60; }
+    .speedup.bad { color: #c0392b; }
+    .sample { font-family: ui-monospace, monospace; font-size: 12px; color: #444; margin-top: 0.5rem; }
+    pre.info { background: #f5f5f5; padding: 1rem; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>workbook-runtime: Candle ops</h1>
+  <p class="meta">
+    Heavier than the smoke test — measures wall-clock for matmul, softmax,
+    and conv2d running through Candle in the browser, with a JS reference
+    baseline alongside. Proves the runtime supports real ML compute, not
+    just toy ops.
+  </p>
+
+  <div class="controls">
+    <label for="n">matmul N =</label>
+    <input id="n" type="number" value="256" min="32" max="1024" step="32" />
+    <button id="run">Run ops</button>
+    <span id="status" class="meta"></span>
+  </div>
+
+  <div id="results"></div>
+
+  <h3 style="margin-top: 2rem;">Build info</h3>
+  <pre class="info" id="info">loading…</pre>
+
+  <script type="module">
+    import init, { runCandleOps, build_info } from "../../pkg/workbook_runtime.js";
+
+    const t0 = performance.now();
+    await init();
+    const t1 = performance.now();
+    document.getElementById("info").textContent = JSON.stringify(
+      { ...build_info(), cold_start_ms: Math.round(t1 - t0) },
+      null, 2,
+    );
+
+    const button = document.getElementById("run");
+    const status = document.getElementById("status");
+    const results = document.getElementById("results");
+
+    button.addEventListener("click", async () => {
+      const n = Number(document.getElementById("n").value);
+      button.disabled = true;
+      status.textContent = "running…";
+      try {
+        // Run JS reference matmul first so the wasm side benefits from
+        // already-warm JIT / paging. Both run on the same n.
+        const jsRef = runJsReference(n);
+
+        const start = performance.now();
+        const wasm = runCandleOps(n);
+        const totalMs = (performance.now() - start).toFixed(2);
+        status.textContent = `done in ${totalMs}ms`;
+
+        renderResults(wasm, jsRef);
+      } catch (e) {
+        status.textContent = "(failed)";
+        results.innerHTML = `<pre style="color:#c0392b">${String(e)}</pre>`;
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    function runJsReference(n) {
+      // Naive O(n^3) matmul + softmax + conv2d in plain JS for comparison.
+      // Same deterministic stride pattern as the Rust side so the input
+      // sizes match exactly.
+      const a = new Float32Array(n * n);
+      const b = new Float32Array(n * n);
+      for (let i = 0; i < n * n; i++) {
+        a[i] = (i % 17) * 0.05 - 0.4;
+        b[i] = ((i * 3) % 13) * 0.1 - 0.6;
+      }
+
+      // Matmul
+      const cMat = new Float32Array(n * n);
+      const t0 = performance.now();
+      for (let i = 0; i < n; i++) {
+        for (let j = 0; j < n; j++) {
+          let s = 0;
+          for (let k = 0; k < n; k++) s += a[i * n + k] * b[k * n + j];
+          cMat[i * n + j] = s;
+        }
+      }
+      const matmulMs = performance.now() - t0;
+
+      // Softmax 1024
+      const v = new Float32Array(1024);
+      for (let i = 0; i < 1024; i++) v[i] = Math.sin(i * 0.01);
+      const t1 = performance.now();
+      let max = -Infinity;
+      for (let i = 0; i < v.length; i++) if (v[i] > max) max = v[i];
+      let sum = 0;
+      const sm = new Float32Array(1024);
+      for (let i = 0; i < v.length; i++) { sm[i] = Math.exp(v[i] - max); sum += sm[i]; }
+      for (let i = 0; i < v.length; i++) sm[i] /= sum;
+      const softmaxMs = performance.now() - t1;
+
+      // Conv2d 1x3x32x32 × 8x3x3x3
+      const inH = 32, inW = 32, inC = 3;
+      const kH = 3, kW = 3, outC = 8;
+      const outH = inH - kH + 1, outW = inW - kW + 1;
+      const inp = new Float32Array(inC * inH * inW);
+      const wt = new Float32Array(outC * inC * kH * kW);
+      for (let i = 0; i < inp.length; i++) inp[i] = (i % 7) * 0.1;
+      for (let i = 0; i < wt.length; i++) wt[i] = (i % 11) * 0.05 - 0.25;
+      const out = new Float32Array(outC * outH * outW);
+      const t2 = performance.now();
+      for (let oc = 0; oc < outC; oc++) {
+        for (let oy = 0; oy < outH; oy++) {
+          for (let ox = 0; ox < outW; ox++) {
+            let s = 0;
+            for (let ic = 0; ic < inC; ic++) {
+              for (let ky = 0; ky < kH; ky++) {
+                for (let kx = 0; kx < kW; kx++) {
+                  const iy = oy + ky, ix = ox + kx;
+                  s += inp[(ic * inH + iy) * inW + ix] *
+                       wt[((oc * inC + ic) * kH + ky) * kW + kx];
+                }
+              }
+            }
+            out[(oc * outH + oy) * outW + ox] = s;
+          }
+        }
+      }
+      const convMs = performance.now() - t2;
+
+      return {
+        matmul: { ms: matmulMs, sample: Array.from(cMat.slice(0, 4)) },
+        softmax: { ms: softmaxMs, sample: Array.from(sm.slice(0, 4)) },
+        conv2d: { ms: convMs, sample: Array.from(out.slice(0, 4)) },
+      };
+    }
+
+    function renderResults(wasm, js) {
+      results.innerHTML = "";
+      for (const [op, label] of [
+        ["matmul", `matmul ${wasm.matmul.shape[0]}×${wasm.matmul.shape[1]}`],
+        ["softmax", `softmax 1024`],
+        ["conv2d", `conv2d 1×3×32×32 → 1×8×30×30`],
+      ]) {
+        const w = wasm[op];
+        const j = js[op];
+        const wMs = w.ms.toFixed(2);
+        const jMs = j.ms.toFixed(2);
+        const speedup = j.ms / w.ms;
+        const speedupClass = speedup >= 1 ? "ok" : "bad";
+        const speedupStr = speedup >= 1
+          ? `${speedup.toFixed(1)}× faster than JS`
+          : `${(1 / speedup).toFixed(1)}× slower than JS`;
+        const panel = document.createElement("div");
+        panel.className = "panel";
+        panel.innerHTML = `
+          <h3>${label}</h3>
+          <div class="timing-pair">
+            <div><span class="label">wasm:</span> <span class="ms">${wMs} ms</span></div>
+            <div><span class="label">js ref:</span> <span class="ms">${jMs} ms</span></div>
+            <div><span class="speedup ${speedupClass}">${speedupStr}</span></div>
+          </div>
+          <div class="sample">first 4 outputs (wasm): [${w.sample.map((x) => x.toFixed(4)).join(", ")}]</div>
+          <div class="sample">first 4 outputs (js):   [${j.sample.map((x) => x.toFixed(4)).join(", ")}]</div>
+        `;
+        results.appendChild(panel);
+      }
+    }
+  </script>
+</body>
+</html>

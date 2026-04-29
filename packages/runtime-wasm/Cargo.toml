@@ -131,5 +131,14 @@ opt-level = 3
 
 [package.metadata.wasm-pack.profile.release]
 # Modern Rust emits trunc_sat_f64 instructions; wasm-opt needs the
-# nontrapping-float-to-int feature flag to validate them.
-wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
+# nontrapping-float-to-int feature flag to validate them. Candle (and
+# matrixmultiply) emit SIMD when targeting wasm32 — enable for validation.
+# Mutable globals + reference-types appear in modern Rust output too.
+wasm-opt = [
+    "-Oz",
+    "--enable-bulk-memory",
+    "--enable-nontrapping-float-to-int",
+    "--enable-simd",
+    "--enable-mutable-globals",
+    "--enable-reference-types",
+]
