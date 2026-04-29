@@ -1,6 +1,6 @@
 {
   "name": "@work.books/runtime",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publishConfig": {
     "access": "public"
   },
@@ -33,6 +33,10 @@
     },
     "./CitationReport.svelte": {
       "svelte": "./src/CitationReport.svelte"
+    },
+    "./notebook": {
+      "svelte": "./src/notebook/index.ts",
+      "types": "./src/notebook/index.ts"
     },
     "./blockRegistry": {
       "svelte": "./src/blockRegistry.ts",

@@ -115,6 +115,19 @@ export class ReactiveExecutor {
     return this.executeFrom(null);
   }
 
+  /**
+   * Re-run a single cell + every cell downstream of it. Use this for
+   * "click Run on this cell" UX — `setCell()` only triggers downstream
+   * cells, but the user clicking Run wants the cell itself to re-run
+   * as well.
+   *
+   * If `id` is unknown the call is a no-op (returns resolved).
+   */
+  runCell(id: string): Promise<void> {
+    if (!this.cells.has(id)) return Promise.resolve();
+    return this.executeFrom([id], [id]);
+  }
+
   /** Snapshot of every cell currently in the executor, in insertion order.
    *  Used by the agent harness to give a model the current notebook state. */
   listCells(): Cell[] {
@@ -171,8 +184,17 @@ export class ReactiveExecutor {
   /**
    * Execute the subgraph of cells reachable from `changedProvides`. If
    * `changedProvides` is null, runs every cell (initial load / runAll).
+   *
+   * `forceIds` (optional) is a list of cell ids to include in the
+   * dirty set regardless of dependency analysis — used by `runCell()`
+   * to make "click Run on this cell" actually re-execute the cell.
+   * Cells whose `reads` intersect with `forceIds` are dirty too
+   * (they depend on a forced cell's output).
    */
-  private async executeFrom(changedProvides: string[] | null): Promise<void> {
+  private async executeFrom(
+    changedProvides: string[] | null,
+    forceIds: string[] = [],
+  ): Promise<void> {
     const gen = ++this.generation;
     const runtimeId = await this.ensureRuntime();
 
@@ -180,6 +202,7 @@ export class ReactiveExecutor {
     const dirty = changedProvides == null
       ? new Set(order.map((c) => c.id))
       : computeDirtySet(order, new Set(changedProvides));
+    for (const id of forceIds) dirty.add(id);
 
     // Mark stale eagerly so the UI shows a "queued" state immediately.
     for (const cell of order) {
