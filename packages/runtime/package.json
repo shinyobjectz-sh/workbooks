@@ -86,6 +86,14 @@
       "types": "./src/crossWorkbookLoader.ts",
       "default": "./src/crossWorkbookLoader.ts"
     },
+    "./runtimeWorker": {
+      "types": "./src/runtimeWorker.ts",
+      "default": "./src/runtimeWorker.ts"
+    },
+    "./runtimeWorkerEntry": {
+      "types": "./src/runtimeWorkerEntry.ts",
+      "default": "./src/runtimeWorkerEntry.ts"
+    },
     "./runDiff": {
       "types": "./src/runDiff.ts",
       "default": "./src/runDiff.ts"

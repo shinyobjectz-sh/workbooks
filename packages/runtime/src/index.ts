@@ -168,6 +168,17 @@ export type {
   ModelArtifactResolver,
 } from "./modelArtifactResolver";
 
+// Worker-isolated runtime client (core-0id.6) — wraps the in-page WASM
+// client in a Worker with a wall-clock budget. On overrun the Worker is
+// terminated and respawned, killing runaway Polars / Linfa / Candle cells
+// the in-process Rhai operations cap can't reach.
+export { createWorkerRuntimeClient } from "./runtimeWorker";
+export type {
+  WorkerRuntimeClientOptions,
+  WorkerReq,
+  WorkerRes,
+} from "./runtimeWorker";
+
 // Cross-workbook load + lockfile (P6.4) — pins (slug, version, sha256)
 // so re-runs are reproducible even when upstream workbooks ship updates.
 export { createCrossWorkbookLoader } from "./crossWorkbookLoader";
