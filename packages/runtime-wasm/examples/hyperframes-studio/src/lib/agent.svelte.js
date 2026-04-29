@@ -261,10 +261,35 @@ export function buildTools() {
   ];
 }
 
+const AGENT_PERSIST_ID = "agentThread";
+
 class AgentStore {
   thread = $state([]);            // [{ role, segments }]
   streaming = $state(null);       // { segments } during a turn, else null
   busy = $state(false);
+  hydrated = $state(false);
+
+  constructor() {
+    // Lazy-import to break the cycle and to avoid pulling persistence
+    // into agent.svelte.js's static init order.
+    import("./persistence.svelte.js").then(({ loadState }) => {
+      return loadState(AGENT_PERSIST_ID).then((saved) => {
+        if (saved && Array.isArray(saved.thread)) {
+          this.thread = saved.thread;
+        }
+        this.hydrated = true;
+      });
+    });
+  }
+
+  _persist() {
+    // Only persist completed turns — `streaming` is in-flight UI state
+    // and is intentionally not saved (a partial turn would rehydrate
+    // confusingly on reload mid-flight).
+    import("./persistence.svelte.js").then(({ markDirty }) => {
+      markDirty(AGENT_PERSIST_ID, () => ({ thread: this.thread }));
+    });
+  }
 
   /** Reset the thread — useful after a context-overflow error or
    *  when the user wants a clean slate. Does not touch the
@@ -273,6 +298,7 @@ class AgentStore {
     if (this.busy) return;
     this.thread = [];
     this.streaming = null;
+    this._persist();
   }
 
   async send(text) {
@@ -289,6 +315,9 @@ class AgentStore {
       role: "user",
       segments: [{ kind: "text", text }],
     }];
+    // Persist the user turn early so a crash mid-stream doesn't lose
+    // what they typed. The assistant turn lands in finally{} below.
+    this._persist();
 
     let currentTextSeg = null;
     const onDelta = (delta) => {
@@ -353,6 +382,10 @@ class AgentStore {
     } finally {
       this.streaming = null;
       this.busy = false;
+      // Persist after every completed turn (success OR error path).
+      // The catch above appended an error-flavored assistant entry so
+      // the thread shape is consistent at this point.
+      this._persist();
     }
   }
 

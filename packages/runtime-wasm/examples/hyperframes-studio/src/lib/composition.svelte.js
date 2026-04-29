@@ -5,6 +5,9 @@
 
 import { INITIAL_COMPOSITION, IFRAME_RUNTIME, IFRAME_RUNTIME_AUTOPLAY } from "./initial.js";
 import { assets } from "./assets.svelte.js";
+import { loadState, markDirty } from "./persistence.svelte.js";
+
+const PERSIST_ID = "composition";
 
 function escapeRe(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -157,6 +160,26 @@ class CompositionStore {
   // Bumped on every set() so the iframe component knows to remount.
   revision = $state(0);
 
+  // Hydration: pulls saved html from IndexedDB if present. Components
+  // bound to .html re-render once the value lands. Set on construction;
+  // resolves asynchronously without blocking module initialization.
+  hydrated = $state(false);
+
+  constructor() {
+    loadState(PERSIST_ID).then((saved) => {
+      if (saved && typeof saved.html === "string") {
+        this.html = saved.html;
+        this.revision += 1;
+      }
+      this.hydrated = true;
+    });
+  }
+
+  /** Tell the persistence coordinator there's a new html to save. */
+  _persist() {
+    markDirty(PERSIST_ID, () => ({ html: this.html }));
+  }
+
   clips = $derived(parseClips(this.html));
   totalDuration = $derived.by(() => {
     let m = 0;
@@ -180,6 +203,7 @@ class CompositionStore {
     this.curTime = 0;
     this.playing = false;
     this.revision += 1;
+    this._persist();
   }
 
   /** Patch a single clip's data-* attributes in place — fast local
@@ -227,6 +251,7 @@ class CompositionStore {
     const replaced = `<${tagName}${attrs}>`;
     this.html = this.html.slice(0, m.index) + replaced + this.html.slice(m.index + whole.length);
     this.revision += 1;
+    this._persist();
     return true;
   }
 
@@ -250,6 +275,7 @@ class CompositionStore {
     const el = `\n<${tag} id="${id}" class="scene" data-start="${startStr}" data-duration="${durStr}" data-track-index="${idx}" data-hf-authored-duration="${durStr}"${labelAttr} src="${safeSrc}"${styleAttr}></${tag}>`;
     this.html = this.html + el;
     this.revision += 1;
+    this._persist();
     return id;
   }
 

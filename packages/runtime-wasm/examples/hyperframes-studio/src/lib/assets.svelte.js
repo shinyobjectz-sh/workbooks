@@ -14,10 +14,14 @@
 //   - Cost: ~33% size inflation (base64), and the whole asset
 //     lives in the JS heap. We don't accept files > ~50 MB.
 //
-// Persistence: in-memory only for v1. Reload = empty registry.
-// IndexedDB persistence is a future bead.
+// Persistence: IndexedDB-backed via lib/persistence.svelte.js. Each
+// mutation marks the registry dirty; the coordinator debounces and
+// writes the whole {items} blob under PERSIST_ID. Reload rehydrates
+// from the same store. The Package zip captures the live registry,
+// so cross-machine portability still goes through that path.
 
 const MAX_BYTES = 50 * 1024 * 1024; // 50 MB hard cap per asset
+const PERSIST_ID = "assets";
 
 function classify(file) {
   const t = file?.type ?? "";
@@ -53,6 +57,29 @@ async function probeMediaDuration(dataUrl, kind) {
 class AssetsStore {
   // [{id, name, type, kind, dataUrl, size, duration, addedAt}]
   items = $state([]);
+  hydrated = $state(false);
+
+  constructor() {
+    // Lazy-import to avoid a circular dep — composition imports assets.
+    import("./persistence.svelte.js").then(({ loadState }) => {
+      return loadState(PERSIST_ID).then((saved) => {
+        if (saved && Array.isArray(saved.items)) {
+          this.items = saved.items;
+        }
+        this.hydrated = true;
+      });
+    });
+  }
+
+  _persist() {
+    // Tolerated cost: every mutation re-serializes the full asset
+    // list (including base64 dataUrls). With a 50 MB cap per asset
+    // and IDB's structured-clone path, this is fine for tens of
+    // assets. Per-asset diffing is a future optimization.
+    import("./persistence.svelte.js").then(({ markDirty }) => {
+      markDirty(PERSIST_ID, () => ({ items: this.items }));
+    });
+  }
 
   async addFromFile(file) {
     const kind = classify(file);
@@ -74,6 +101,7 @@ class AssetsStore {
       addedAt: Date.now(),
     };
     this.items = [...this.items, item];
+    this._persist();
     return item;
   }
 
@@ -89,6 +117,15 @@ class AssetsStore {
 
   remove(id) {
     this.items = this.items.filter((a) => a.id !== id);
+    this._persist();
+  }
+
+  /** Replace the entire registry with the supplied items in one
+   *  reactive update. Used by importProjectFile to apply a project
+   *  state without firing per-item subscribers. */
+  replaceAll(items) {
+    this.items = (items ?? []).slice();
+    this._persist();
   }
 
   get(id) { return this.items.find((a) => a.id === id) ?? null; }

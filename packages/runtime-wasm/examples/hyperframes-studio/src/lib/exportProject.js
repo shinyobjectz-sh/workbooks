@@ -1,22 +1,35 @@
-// Project export — packages the running hyperframes app + current
-// state (composition HTML + asset registry) into a portable
-// .workbook.zip via the @work.books/runtime packager.
+// Project export — packages the running workbook into a portable
+// .zip suitable for re-opening on another machine.
 //
-// Why a snapshot rather than passing document.documentElement.outerHTML
-// directly: the asset registry lives in JS heap (assets.items[].dataUrl),
-// not in <wb-data> elements yet. We materialize the registry into the
-// snapshot DOM at export time so the packager can extract them.
+// What lands in the zip
+// ---------------------
+//   <slug>.workbook.html     ← the FULL self-contained build with
+//                              all wasm + runtime + skills inlined,
+//                              edited to embed the user's current
+//                              composition + asset registry as
+//                              <wb-data> blocks.
+//   assets/<sha256>.<ext>    ← media large enough that base64 in the
+//                              HTML costs more than a sidecar file
+//                              (default: anything > 100 KB).
+//   manifest.json            ← format metadata (id ↔ asset hash
+//                              mapping). Emitted by the packager for
+//                              tooling. See core-mt6 successor bead
+//                              re. making this optional.
 //
-// The deeper migration (assets stored as live <wb-data> blocks at all
-// times) is task #26 and tracks separately. This export path works
-// either way — extracting from the live DOM where assets are wired,
-// extracting from the snapshot DOM otherwise.
+// Why fetch the source instead of cloning document.documentElement
+// ----------------------------------------------------------------
+// document.documentElement.cloneNode(true) gives a snapshot of the
+// LIVE rendered DOM — the SPA's mounted Svelte tree, the iframe's
+// running playback state, etc. That snapshot doesn't match the
+// portable build's structure. Fetching location.href returns the
+// SOURCE HTML the browser loaded — the actual <slug>.workbook.html
+// with its inlined wasm, bindgen, runtime bundle, and workbook spec
+// blocks. We mutate that doc to inject current state, then package.
 
 import { downloadWorkbookZip } from "@work.books/runtime/packageWorkbook";
 import { composition } from "./composition.svelte.js";
 import { assets } from "./assets.svelte.js";
 
-/** Slugify a string for use in a filename. */
 function slug(s) {
   return String(s ?? "")
     .toLowerCase()
@@ -25,103 +38,247 @@ function slug(s) {
     .slice(0, 60) || "hyperframes";
 }
 
-/**
- * Build a workbook-shaped HTML string capturing the current state:
- *   - the live runtime (cloned from document.documentElement)
- *   - composition.html injected into a <wb-data id="composition" mime="text/html">
- *   - each asset as <wb-data id="asset-<id>" mime="..."> with the data URL inlined
+function detectSlugFromManifest() {
+  if (typeof document === "undefined") return null;
+  const el = document.getElementById("workbook-spec");
+  if (!el) return null;
+  try { return JSON.parse(el.textContent || "{}")?.manifest?.slug ?? null; }
+  catch { return null; }
+}
+
+/** Read the source HTML the browser loaded.
  *
- * The packager will then walk those <wb-data> blocks, extract anything
- * over the inline threshold to assets/<sha256>.<ext>, and rewrite refs.
- */
-function buildSnapshotHtml() {
+ *  1. First try `fetch(location.href)` — fast path, works for http
+ *     and https. Returns the exact bytes the server delivered.
+ *  2. If that fails (Chrome blocks file:// → file:// fetch with a
+ *     CORS error; this is the common case for a downloaded
+ *     .workbook.html opened via double-click), fall back to
+ *     serialising the live DOM. The inlined `<script id="wasm-b64">`,
+ *     `<script id="bindgen-src">`, `<script id="runtime-bundle-src">`,
+ *     and `<script id="workbook-spec">` blocks are inert
+ *     type="text/plain" elements that the browser parses but does
+ *     NOT execute, so their full content is present in the DOM and
+ *     survives outerHTML serialisation byte-for-byte.
+ *
+ *  Before serialising we empty `<div id="app">` so a clean Svelte
+ *  mount happens on re-open — without that we'd ship the user's
+ *  current rendered tree, which would either re-mount over the top
+ *  or hydrate against a stale shape. */
+async function fetchSourceHtml() {
+  try {
+    const res = await fetch(location.href, { cache: "no-store" });
+    if (res.ok) return await res.text();
+  } catch {
+    // file:// origin blocked, network unreachable, etc. — fall through.
+  }
+  return serializeLiveDocument();
+}
+
+function serializeLiveDocument() {
   const cloned = document.documentElement.cloneNode(true);
+  // Reset the SPA mount point so Svelte renders fresh on re-open.
+  const app = cloned.querySelector("#app");
+  if (app) app.innerHTML = "";
+  // Drop any prior export-state wb-workbook block — injectStateInto
+  // will rebuild it cleanly. Without this, repeated exports would
+  // accumulate duplicate <wb-workbook data-export-state> nodes.
+  for (const el of cloned.querySelectorAll("wb-workbook[data-export-state]")) {
+    el.remove();
+  }
+  return "<!DOCTYPE html>\n" + cloned.outerHTML;
+}
 
-  // Find or create a <wb-workbook> wrapper inside body so the runtime
-  // can locate the embedded data on reload. We don't need it for the
-  // current ship (the runtime mounts its own SPA) but it makes the
-  // zip self-describing.
-  const body = cloned.querySelector("body");
-  if (!body) return "<!DOCTYPE html>\n" + cloned.outerHTML;
+/** True when the loaded HTML is a fully self-contained build —
+ *  identifies inlined wasm + runtime tags. Refuse export when this
+ *  isn't true (running via `workbook dev`, etc.). */
+function isPortableBuild(html) {
+  return html.includes('id="wasm-b64"')
+      && html.includes('id="runtime-bundle-src"');
+}
 
-  let wb = body.querySelector("wb-workbook");
+/** Inject the current composition HTML + asset registry into the
+ *  source doc as <wb-data> blocks the packager understands. */
+function injectStateInto(doc) {
+  const body = doc.querySelector("body");
+  if (!body) return;
+
+  let wb = body.querySelector("wb-workbook[data-export-state]");
   if (!wb) {
-    wb = document.createElement("wb-workbook");
+    wb = doc.createElement("wb-workbook");
+    wb.setAttribute("data-export-state", "");
     wb.setAttribute("name", "hyperframes-snapshot");
-    wb.style.display = "none";
+    wb.setAttribute("hidden", "");
     body.appendChild(wb);
   }
 
-  // Composition HTML — stored as inline-text wb-data (not base64
-  // because it's already text and benefits from being grep-able).
+  // Composition — inline text, grep-able.
   let compEl = wb.querySelector('wb-data[id="composition"]');
   if (!compEl) {
-    compEl = document.createElement("wb-data");
+    compEl = doc.createElement("wb-data");
     compEl.setAttribute("id", "composition");
     compEl.setAttribute("mime", "text/html");
     wb.appendChild(compEl);
   }
   compEl.textContent = composition.html ?? "";
 
-  // Asset registry — each entry as inline-base64 wb-data. We strip
-  // the "data:<mime>;base64," prefix and put the raw base64 in the
-  // body, with mime as an attribute. The packager extracts anything
-  // over its threshold to assets/<sha256>.<ext>.
+  // Each asset — base64 inline if matched, raw text for non-base64
+  // data URLs (svgs sometimes ship as `data:image/svg+xml,<...>`).
+  // The packager extracts anything > threshold to assets/<sha>.<ext>.
   for (const a of assets.items) {
     const id = `asset-${a.id}`;
-    let el = wb.querySelector(`wb-data[id="${id}"]`);
+    let el = wb.querySelector(`wb-data[id="${CSS.escape(id)}"]`);
     if (!el) {
-      el = document.createElement("wb-data");
+      el = doc.createElement("wb-data");
       el.setAttribute("id", id);
       wb.appendChild(el);
     }
     const m = /^data:([^;,]+)(;[^,]*)?,(.*)$/i.exec(a.dataUrl ?? "");
     if (!m) continue;
-    const mime = m[1];
-    const params = m[2] ?? "";
-    const payload = m[3] ?? "";
-    if (!params.includes(";base64")) {
-      // Non-base64 data URL — keep inline-text so we don't lose
-      // semantics. SVGs sometimes ship as `data:image/svg+xml,<...>`
-      // url-encoded.
-      el.setAttribute("mime", mime);
+    const [, mime, params = "", payload = ""] = m;
+    el.setAttribute("mime", mime);
+    if (a.name) el.setAttribute("data-name", a.name);
+    if (params.includes(";base64")) {
+      el.setAttribute("encoding", "base64");
+      el.textContent = payload;
+    } else {
       el.removeAttribute("encoding");
       try { el.textContent = decodeURIComponent(payload); }
       catch { el.textContent = payload; }
-      continue;
     }
-    el.setAttribute("mime", mime);
-    el.setAttribute("encoding", "base64");
-    el.textContent = payload;
   }
-
-  return "<!DOCTYPE html>\n" + cloned.outerHTML;
 }
 
-/**
- * Build the snapshot, package it, and trigger a download. Returns
- * a summary of what got bundled for the caller to surface in UI.
- */
+async function buildPortableHtml() {
+  const source = await fetchSourceHtml();
+  if (!isPortableBuild(source)) {
+    throw new Error(
+      "Page isn't a self-contained build (running in dev mode?). " +
+      "Open the .workbook.html in dist/ to export, or run `workbook build` first."
+    );
+  }
+  const doc = new DOMParser().parseFromString(source, "text/html");
+  injectStateInto(doc);
+  return "<!DOCTYPE html>\n" + doc.documentElement.outerHTML;
+}
+
+// ─── Lighter project-only export ────────────────────────────────
+//
+// When two people already have the editor, shuttling the full 18 MB
+// .workbook.html back and forth wastes bandwidth — they only need
+// the project state (composition HTML + asset registry). This path
+// emits a small `.hyperframes.json` file that the editor can
+// re-import via importProjectFile().
+//
+// Format is intentionally simple: one JSON object, every asset
+// inlined as a data URL. For very large media projects this still
+// gets big; a future v2 could split assets into a sidecar zip.
+
+const PROJECT_FORMAT = "hyperframes-project";
+const PROJECT_VERSION = 1;
+
+/** Serialize the current studio state to a portable JSON blob. */
+export async function exportProjectFile({ filename, onError } = {}) {
+  try {
+    const baseSlug = detectSlugFromManifest() ?? slug(composition.title ?? "hyperframes");
+    const finalName = filename ?? `${baseSlug}.hyperframes.json`;
+    const payload = {
+      format: PROJECT_FORMAT,
+      version: PROJECT_VERSION,
+      generated_at: new Date().toISOString(),
+      title: composition.title ?? null,
+      composition: composition.html ?? "",
+      assets: assets.items.map((a) => ({
+        id: a.id,
+        name: a.name,
+        kind: a.kind,
+        mime: a.mime ?? null,
+        size: a.size ?? null,
+        duration: a.duration ?? null,
+        dataUrl: a.dataUrl,
+      })),
+    };
+    const json = JSON.stringify(payload);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    try {
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = finalName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } finally {
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+    return {
+      ok: true,
+      bytes: json.length,
+      assetCount: payload.assets.length,
+      filename: finalName,
+    };
+  } catch (e) {
+    onError?.(e);
+    return { ok: false, error: e?.message ?? String(e) };
+  }
+}
+
+/** Apply a previously-exported project file to the live studio.
+ *  Replaces composition + asset registry. Returns a summary. */
+export async function importProjectFile(fileOrText) {
+  const text = typeof fileOrText === "string"
+    ? fileOrText
+    : await fileOrText.text();
+  let parsed;
+  try { parsed = JSON.parse(text); }
+  catch (e) { throw new Error("File isn't valid JSON"); }
+  if (parsed?.format !== PROJECT_FORMAT) {
+    throw new Error(`Unrecognized format: ${parsed?.format ?? "(none)"}`);
+  }
+  if ((parsed?.version ?? 0) > PROJECT_VERSION) {
+    throw new Error(`Project file version ${parsed.version} is newer than supported (${PROJECT_VERSION})`);
+  }
+  // Reset asset registry to mirror the imported state. We add new
+  // entries instead of mutating in place so subscribers see one
+  // coherent change.
+  assets.replaceAll((parsed.assets ?? []).map((a) => ({
+    id: a.id ?? `asset-${Math.random().toString(36).slice(2, 10)}`,
+    name: a.name ?? "(unnamed)",
+    kind: a.kind ?? "image",
+    mime: a.mime ?? null,
+    size: a.size ?? null,
+    duration: a.duration ?? null,
+    dataUrl: a.dataUrl ?? "",
+    addedAt: Date.now(),
+  })));
+  composition.set(String(parsed.composition ?? ""));
+  return {
+    ok: true,
+    assetCount: parsed.assets?.length ?? 0,
+  };
+}
+
+/** Build the snapshot, package it, and trigger a download. The zip
+ *  contains <slug>.workbook.html + assets/ + manifest.json. */
 export async function exportProject({ filename, onError } = {}) {
   try {
-    const html = buildSnapshotHtml();
-    const sourceBytes = html.length;
-    const finalName = filename ?? `${slug(composition.title ?? "hyperframes")}.workbook.zip`;
-    await downloadWorkbookZip(html, finalName, {
-      // Inline anything under 100 KB; extract larger assets (videos
-      // especially). Per-asset HTTP overhead isn't worth it for tiny
-      // SVGs and thumbnails.
+    const html = await buildPortableHtml();
+    const baseSlug = detectSlugFromManifest() ?? slug(composition.title ?? "hyperframes");
+    const zipName = filename ?? `${baseSlug}.zip`;
+    await downloadWorkbookZip(html, zipName, {
+      // Inline anything under 100 KB; extract larger assets to
+      // assets/<sha>.<ext>.
       extractInlineLargerThan: 100 * 1024,
-      // No external bundling by default — the export flow is for
-      // local-asset projects. Hosts that need external bundling can
-      // pass an allowlist via opts.
+      // The HTML inside the zip is named <slug>.workbook.html so
+      // it matches the file users would have built standalone.
+      htmlBasename: `${baseSlug}.workbook`,
+      // No external bundling by default — local-asset projects only.
       bundleExternal: false,
     });
     return {
       ok: true,
-      sourceBytes,
+      sourceBytes: html.length,
       assetCount: assets.items.length,
-      filename: finalName,
+      filename: zipName,
     };
   } catch (e) {
     onError?.(e);
