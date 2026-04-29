@@ -1,12 +1,28 @@
-# Signal Workbook Format Specification
+# Workbook Format Specification
 
 ## Vision
 
-A `.workbook` is Signal's canonical document format. Every artifact the system produces — reports, notebooks, data analyses, ML experiments, recurring monitors — is a workbook. There is no separate "report type" or "notebook type". A workbook can be opened in a browser as a static document, executed as a live notebook, scheduled as a recurring pipeline, called as an API, or served as an MCP server. These are modes of the same artifact, not different artifact types.
+A `.workbook` is the canonical artifact format for **portable browser apps with an embedded execution runtime**. Reports, notebooks, data analyses, ML experiments, recurring monitors, full chat agents, multi-page Svelte SPAs — all expressed as a single canonical type. There is no separate "report type" or "app type". A workbook can be opened in a browser as a static document, executed as a live notebook, scheduled as a recurring pipeline, called as an API, or served as an MCP server. These are modes of the same artifact, not different artifact types.
 
-The format is a self-contained HTML file that opens in any browser without installation. **Cells execute in a Rust runtime compiled to WebAssembly that ships with the workbook** — Polars for DataFrames, DuckDB-WASM for SQL, Candle for ML inference, Linfa for classical ML, Plotters for visualization, Rhai for scripting glue. No Python sandbox, no server-side compute for the common path, no cold start. A workbook is fully runnable in the browser the moment it loads. Heavy or specialized workloads can opt into a Signal-hosted runtime (Tier 3 below), but the default — and the differentiator — is client-side execution.
+## Three canonical types
 
-See `WORKBOOK_RUST_PIVOT.md` for the full architectural rationale and tool mapping from Python ecosystem equivalents.
+`manifest.type` (string, optional, default `"spa"`) declares which rendering profile a host should apply. Same format, same runtime, same env contract across all three:
+
+| `type`     | Shape | Example | Host renders |
+|------------|-------|---------|---|
+| `document` | Read-mostly. Prose + auto-rendered blocks (charts, tables, citations). No agent loop or compute affordances surfaced to the reader. | a quarterly report, a published analysis | Paper-like reader chrome wrapping the workbook tree |
+| `notebook` | Linear runner with cells in a static DAG. Reactive execution; reader edits inputs, re-runs cells, sees outputs materialize. | an ML experiment, a data exploration | Notebook chrome with run/restart/clear controls |
+| `spa`      | Full canvas application. Author renders whatever UI they want; runtime is a service available on demand. | `examples/chat-app/`, `examples/svelte-app/` | None — workbook renders itself |
+
+Type is a hint to consumers about what chrome (if any) to wrap the workbook in. It is **not** a build-path branch — the same `.workbook.html` file format produces all three. Cells, inputs, manifest schema, runtime contract, env declarations are identical.
+
+## Format
+
+The format is a self-contained HTML file that opens in any browser without installation. **Cells, when present, execute in a Rust runtime compiled to WebAssembly that ships with the workbook** — Polars for DataFrames, DuckDB-WASM for SQL, Candle for ML inference, Linfa for classical ML, Plotters for visualization, Rhai for scripting glue. No Python sandbox, no server-side compute for the common path, no cold start. A workbook is fully runnable in the browser the moment it loads. Heavy or specialized workloads can opt into a Signal-hosted runtime (Tier 3 below), but the default — and the differentiator — is client-side execution.
+
+For SPA workbooks, cells are usually empty — the author is rendering a custom UI directly. The wasm runtime is still available on demand via `virtual:workbook-runtime` (or, for hand-written single-file workbooks, by reading the inlined `<script id="*">` blocks at boot).
+
+See `WORKBOOK_RUST_PIVOT.md` for the full architectural rationale and tool mapping from Python ecosystem equivalents. See `WORKBOOK_AS_APP.md` for the SPA authoring patterns (chat-app + svelte-app exemplars, build tool, env contract, trigger-substring discipline).
 
 ---
 
@@ -336,6 +352,7 @@ OpenAPI is generated automatically alongside the proto. SDK consumers pick which
 {
   "version": "1.0",
   "kind": "workbook",
+  "type": "document | notebook | spa",
   "id": "<convex id>",
   "slug": "<human-readable slug>",
   "title": "string",
@@ -346,7 +363,25 @@ OpenAPI is generated automatically alongside the proto. SDK consumers pick which
   "exportedAt": "ISO 8601",
   "exportMode": "linked | portable",
 
+  // Optional. Document and notebook workbooks use blocks as their
+  // primary content. SPA workbooks usually have an empty blocks
+  // array — the author renders custom HTML/components directly,
+  // typically pulling the wasm runtime in on demand.
   "blocks": [ /* see Block Catalog */ ],
+
+  // Optional. Varlock-style env contract — declares what env keys
+  // the workbook needs at runtime. Hosts resolve values from
+  // window.WORKBOOK_ENV → namespaced localStorage; values flagged
+  // `secret: true` are stripped before serialization. See
+  // WORKBOOK_AS_APP.md for the full pattern.
+  "env": {
+    "<KEY>": {
+      "label": "human-readable label",
+      "prompt": "placeholder text",
+      "required": true,
+      "secret": true
+    }
+  },
 
   "parameters": {
     "<name>": {

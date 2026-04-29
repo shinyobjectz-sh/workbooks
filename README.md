@@ -74,6 +74,7 @@ knows how to execute itself, anywhere, today and in fifteen years.
 | **Distribution** | "Open Jupyter, install Python, run …" | Save a single `.workbook.html`, double-click, runs anywhere |
 | **Agents** | Bolted-on chat panel calling a hosted API | Typed `LlmService` proto; agents are first-class cells; tools are sibling cells |
 | **Extensibility** | Plugin = patch the host app | `registerWorkbookCell(language, impl)` — any developer ships a new cell type as a JS module; HTML authors use it as `<wb-cell language="my-thing">` |
+| **Apps** | Notebook-shaped or nothing | Same format ships full SPAs — `examples/chat-app/` is a multi-mode chat agent in a single HTML file; `examples/svelte-app/` is a multi-page Svelte app built via `@work.books/cli` |
 | **License** | Vendor-controlled | Apache-2.0; format and reference implementations both open source |
 
 Mozilla AI's [wasm-agents-blueprint](https://github.com/mozilla-ai/wasm-agents-blueprint)
@@ -219,7 +220,44 @@ Click through the nav: each demo proves a different layer of the runtime.
 | `chat-app/` | Multi-mode agent app on top of the runtime | Hamburger / left nav / right inspector |
 | `html-workbook/` | HTML *is* the workbook | View Source = workbook source |
 | `html-agent/` | Agent grounded on cell outputs | Polars table → GPT-4o-mini quotes exact numbers in chat |
+| `svelte-app/` | Multi-page SPA via the build tool | Hash-routed Svelte 5 app, lazy wasm runtime |
 | `runner/` | `.workbook` files run via drag-drop | Generic player |
+
+---
+
+## Build your own — `@work.books/cli`
+
+For SPA workbooks (multi-file, framework-based), use the published
+build tool. Lives at `packages/workbook-cli/`; the `examples/svelte-app/`
+project is the reference consumer.
+
+```bash
+npm install -D @work.books/cli @sveltejs/vite-plugin-svelte svelte
+```
+
+```js
+// workbook.config.mjs
+export default {
+  name: "my workbook",
+  slug: "my-workbook",
+  type: "spa",                  // document | notebook | spa
+  entry: "src/index.html",
+  env: { OPENROUTER_API_KEY: { required: true, secret: true } },
+};
+```
+
+```bash
+npx workbook dev      # http://localhost:5173 with HMR
+npx workbook build    # → dist/<slug>.workbook.html (single file)
+```
+
+See `docs/WORKBOOK_AS_APP.md` for the full pattern: env contract,
+markdown rendering, runtime loader, trigger-substring discipline,
+persistence choices.
+
+For document/notebook workbooks (cells + reactive DAG), keep using
+the existing path — author HTML directly with `<wb-cell>` /
+`<wb-input>` / `<wb-output>` elements, no build tool needed.
 
 ---
 
