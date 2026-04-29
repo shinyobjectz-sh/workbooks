@@ -59,6 +59,9 @@ pub mod inference;
 #[cfg(feature = "linfa")]
 pub mod train;
 
+#[cfg(feature = "vectors")]
+pub mod vectors;
+
 /// Library-load hook. Wires up panic forwarding to the JS console so a panic
 /// in any cell surfaces as a readable error in the workbook UI rather than a
 /// silent abort.
