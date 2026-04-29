@@ -191,6 +191,19 @@ export type {
   WorkbookMemoryResolverOptions,
 } from "./workbookMemoryResolver";
 
+// Workbook doc resolver — materializes <wb-doc> CRDT blocks (Loro
+// today, Automerge / Yjs later) into loaded handles. Cells consume
+// docs read-only as JSON projections via reads=. Lazy-loads the
+// loro-crdt sidecar only when a workbook contains a <wb-doc>.
+export { createWorkbookDocResolver } from "./workbookDocResolver";
+export type {
+  ResolvedDoc,
+  WorkbookDocResolver,
+  WorkbookDocResolverOptions,
+} from "./workbookDocResolver";
+export { createLoroDispatcher } from "./loroSidecar";
+export type { LoroDispatcher, LoroDocHandle } from "./loroSidecar";
+
 // SQLite cell dispatcher — JS-side sidecar around @sqlite.org/sqlite-wasm.
 // Hosts that need to evict cached DB handles (e.g. on workbook unmount)
 // import the dispatcher type and call dispose(). The runtime client wires

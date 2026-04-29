@@ -49,6 +49,10 @@ import {
   createWorkbookMemoryResolver,
   type WorkbookMemoryResolver,
 } from "./workbookMemoryResolver";
+import {
+  createWorkbookDocResolver,
+  type WorkbookDocResolver,
+} from "./workbookDocResolver";
 
 // ----------------------------------------------------------------------
 // Plugin registry — third parties can register cell languages.
@@ -660,6 +664,12 @@ export interface MountOptions {
    * dataResolver.
    */
   memoryResolver?: WorkbookMemoryResolver;
+  /**
+   * Override the resolver used to materialize `<wb-doc>` CRDT blocks.
+   * Default builds one with no `allowedHosts`. Constructs a fresh
+   * Loro dispatcher per mount.
+   */
+  docResolver?: WorkbookDocResolver;
 }
 
 export async function mountHtmlWorkbook(opts: MountOptions): Promise<{
@@ -753,6 +763,16 @@ export async function mountHtmlWorkbook(opts: MountOptions): Promise<{
     if (client.registerMemory) {
       await client.registerMemory(id, resolved.bytes);
     }
+  }
+
+  // Resolve <wb-doc> CRDT blocks. First-ship contract is read-only:
+  // cells receive a JSON projection of the doc state via the input
+  // map. Mutation API (host-driven LoroDoc.getMap.set + commit +
+  // export-and-persist) lands in a follow-up.
+  const docResolver = opts.docResolver ?? createWorkbookDocResolver();
+  const resolvedDocs = await docResolver.resolveAll(spec.docs);
+  for (const [id, resolved] of resolvedDocs) {
+    mergedInputs[id] = resolved.handle.toJSON();
   }
 
   const executor = new ReactiveExecutor({
