@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>workbook-runtime hello cell</title>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    textarea { width: 100%; height: 6rem; font-family: ui-monospace, monospace; padding: 0.5rem; }
+    button { padding: 0.5rem 1rem; margin-top: 0.5rem; cursor: pointer; }
+    pre { background: #f5f5f5; padding: 1rem; border-radius: 4px; min-height: 2rem; }
+    .meta { color: #666; font-size: 0.875rem; }
+    .err { color: #c0392b; }
+  </style>
+</head>
+<body>
+  <h1>workbook-runtime: hello cell</h1>
+  <p class="meta">Smoke test — runs a Rhai expression in the WASM runtime and shows the result.</p>
+
+  <textarea id="src">let n = 40;
+n + 2</textarea>
+  <button id="run">Run</button>
+
+  <h3>Output</h3>
+  <pre id="out">(not yet run)</pre>
+
+  <h3>Build info</h3>
+  <pre id="info">loading…</pre>
+
+  <script type="module">
+    import init, { runRhai, build_info } from "../../pkg/workbook_runtime.js";
+
+    const t0 = performance.now();
+    await init();
+    const t1 = performance.now();
+
+    document.getElementById("info").textContent = JSON.stringify(
+      { ...build_info(), cold_start_ms: Math.round(t1 - t0) },
+      null, 2,
+    );
+
+    const out = document.getElementById("out");
+    document.getElementById("run").addEventListener("click", () => {
+      const src = document.getElementById("src").value;
+      try {
+        const start = performance.now();
+        const outputs = runRhai(src);
+        const ms = (performance.now() - start).toFixed(2);
+        out.textContent = JSON.stringify(outputs, null, 2) + `\n\n// ${ms}ms`;
+        out.classList.remove("err");
+      } catch (e) {
+        out.textContent = String(e);
+        out.classList.add("err");
+      }
+    });
+  </script>
+</body>
+</html>

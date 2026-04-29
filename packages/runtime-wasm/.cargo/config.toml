@@ -1,0 +1,10 @@
+# Explicit wasm32 build flags.
+#
+# getrandom 0.3+ requires --cfg getrandom_backend="wasm_js" for the
+# wasm32-unknown-unknown target since that target has no native randomness
+# source. We route through getrandom's wasm_js backend which calls into
+# crypto.getRandomValues in the browser.
+[target.wasm32-unknown-unknown]
+rustflags = [
+    '--cfg', 'getrandom_backend="wasm_js"',
+]

@@ -6,7 +6,7 @@ description = "Workbook execution runtime — Rust crates compiled to WASM for c
 license = "Apache-2.0"
 repository = "https://github.com/zaius-labs/workbooks"
 homepage = "https://github.com/zaius-labs/workbooks"
-keywords = ["workbook", "wasm", "duckdb", "polars", "notebook"]
+keywords = ["workbook", "wasm", "polars", "sqlite", "notebook"]
 categories = ["wasm", "science"]
 
 [lib]
@@ -17,11 +17,22 @@ path = "src/lib.rs"
 # Tree-shakeable feature slices. The agent declares which slices a workbook
 # needs in `manifest.environment.runtimeFeatures`; the bundle is built once
 # but cells only load the slices their workbook references.
-default = ["sql", "polars-frames", "charts", "rhai-glue"]
+#
+# Default targets ~3-5 MB compressed. Polars covers OLAP via lazy LazyFrame
+# + SQL frontend, sqlite covers small structured state, plotters covers
+# charts, rhai covers scripting. DuckDB is opt-in (lazy-loaded chunk for
+# workbooks that explicitly need DuckDB-only SQL features).
+#
+# NOTE: Polars + SQLite-via-rusqlite have known wasm32 build complications
+# (parquet/lz4 C deps for Polars; SQLite C source for rusqlite). They're
+# wired up but excluded from the *default* feature set during P2.2 baseline;
+# enable explicitly to opt in. See README "Building" for the matrix.
+default = ["charts", "rhai-glue"]
 
-# Data layer — DuckDB-WASM for SQL, DataFusion as alt query engine.
-sql = ["dep:duckdb"]
+# Data layer
 polars-frames = ["dep:polars"]
+sqlite = ["dep:rusqlite"]
+duckdb = ["dep:duckdb"]                 # opt-in — lazy-loaded chunk
 
 # Visualization
 charts = ["dep:plotters"]
@@ -52,7 +63,7 @@ image-ops = ["dep:image"]
 
 # Everything — convenience for development
 all = [
-  "sql", "polars-frames", "charts", "rhai-glue",
+  "polars-frames", "charts", "rhai-glue", "sqlite", "duckdb",
   "candle", "linfa", "burn", "stats", "vectors",
   "tokenizers", "image-ops",
 ]
@@ -75,8 +86,13 @@ arrow = { version = "53", default-features = false, features = ["ipc"] }
 
 # Optional feature crates (gated above)
 duckdb = { version = "1", optional = true, default-features = false, features = ["bundled"] }
+rusqlite = { version = "0.32", optional = true, default-features = false, features = ["bundled", "serde_json"] }
 polars = { version = "0.45", optional = true, default-features = false, features = [
-  "lazy", "csv", "parquet", "json", "strings", "temporal", "dtype-full",
+  # Conservative wasm32-friendly set: lazy + CSV + JSON + strings/temporal +
+  # SQL frontend. Parquet and dtype-full pull in lz4-sys / zstd-sys C deps
+  # that need a wasm32 C toolchain — opt those in via a separate feature
+  # once we have wasm32 cc set up.
+  "lazy", "csv", "json", "strings", "temporal", "sql",
 ] }
 plotters = { version = "0.3", optional = true, default-features = false, features = [
   "svg_backend", "line_series", "histogram", "area_series",
@@ -95,6 +111,10 @@ tokenizers = { version = "0.20", optional = true, default-features = false, feat
 image = { version = "0.25", optional = true, default-features = false, features = [
   "png", "jpeg", "webp",
 ] }
+# getrandom 0.3 has the wasm_js backend gated by both a feature flag
+# (in deps) and a build-time cfg (in .cargo/config.toml). Pinning the
+# direct dep here ensures any transitive uses of 0.3 see the feature.
+getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 
 [profile.release]
 # Optimize for size first, speed second — bundle size is critical for browser load.
@@ -110,4 +130,6 @@ inherits = "release"
 opt-level = 3
 
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-Oz", "--enable-bulk-memory"]
+# Modern Rust emits trunc_sat_f64 instructions; wasm-opt needs the
+# nontrapping-float-to-int feature flag to validate them.
+wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
