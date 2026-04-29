@@ -155,12 +155,47 @@ export interface WorkbookData {
     | { kind: "external"; src: string; sha256: string; bytes?: number };
 }
 
+/**
+ * A `<wb-memory>` block — append-shaped tabular memory backed by an
+ * Apache Arrow IPC stream. Where `<wb-data>` is for static authored
+ * datasets, `<wb-memory>` is for state the workbook accumulates over
+ * time: agent observations, eval traces, telemetry, conversation
+ * facts. Cells query it via Polars-SQL (registered as a table
+ * matching the block id).
+ *
+ * Writes happen out-of-band — a host-provided runtime API
+ * (`client.appendMemory(id, rows)`) appends record batches in WASM
+ * linear memory. Cells do not mutate memory directly; this keeps
+ * side effects auditable and routable through agent tool layers.
+ *
+ * Two storage forms (no inline-text — Arrow IPC is binary):
+ *   inline-base64: <wb-memory id encoding="base64" sha256="...">QVJ...
+ *   external:      <wb-memory id src="https://..." sha256="..." bytes="..."/>
+ *
+ * The body is an Arrow IPC stream (a leading schema message followed
+ * by record batches); appending rows = appending one more record
+ * batch to the stream.
+ */
+export interface WorkbookMemory {
+  id: string;
+  /** Optional schema id (for cross-workbook schema registry). Never
+   *  trusted by the runtime; cells get the schema from the IPC stream
+   *  itself. */
+  schemaId?: string;
+  /** Optional row count hint; UI display only. */
+  rows?: number;
+  source:
+    | { kind: "inline-base64"; base64: string; sha256: string }
+    | { kind: "external"; src: string; sha256: string; bytes?: number };
+}
+
 interface WorkbookHtmlSpec {
   name: string;
   cells: Cell[];
   inputs: Record<string, unknown>;
   agents: AgentSpec[];
   data: WorkbookData[];
+  memory: WorkbookMemory[];
 }
 
 /**
@@ -257,6 +292,14 @@ const MAX_INLINE_BASE64_CHARS = 14_000_000;            // ~10 MB binary after de
 const MAX_AGGREGATE_INLINE_BYTES = 25 * 1024 * 1024;  // 25 MB total inline
 const MAX_EXTERNAL_DECLARED_BYTES = 500 * 1024 * 1024; // 500 MB declared size
 
+/**
+ * `<wb-memory>` caps. Tighter than data caps on count (memory blocks
+ * tend to be fewer and larger; an explosion of memory ids is more
+ * suspicious). Same per-block + aggregate limits as data — they
+ * share the overall inline budget.
+ */
+const MAX_MEMORY_BLOCKS = 16;
+
 function clipString(raw: string, maxBytes: number): string {
   if (raw.length <= maxBytes) return raw;
   return raw.slice(0, maxBytes);
@@ -289,6 +332,7 @@ export function parseWorkbookHtml(root: Element): WorkbookHtmlSpec {
   const inputs: Record<string, unknown> = {};
   const agents: AgentSpec[] = [];
   const data: WorkbookData[] = [];
+  const memory: WorkbookMemory[] = [];
   let aggregateInlineBytes = 0;
 
   // Inputs.
@@ -426,7 +470,53 @@ export function parseWorkbookHtml(root: Element): WorkbookHtmlSpec {
     if (entry) data.push(entry);
   }
 
-  return { name, cells, inputs, agents, data };
+  // Memory blocks. Append-shaped tabular state, queryable as a Polars
+  // table by id. Body must be an Arrow IPC stream — binary only, so
+  // no inline-text form. Shares the inline byte budget with <wb-data>.
+  for (const el of root.querySelectorAll("wb-memory")) {
+    if (memory.length >= MAX_MEMORY_BLOCKS) break;
+    const id = validId(el.getAttribute("id"));
+    if (!id) continue;
+    if (usedIds.has(id)) continue;
+    usedIds.add(id);
+
+    const sha256Attr = (el.getAttribute("sha256") ?? "").toLowerCase();
+    const sha256 = VALID_SHA256.test(sha256Attr) ? sha256Attr : null;
+    if (!sha256) continue; // sha256 required for any binary form
+
+    const rowsAttr = Number(el.getAttribute("rows"));
+    const rows = Number.isFinite(rowsAttr) && rowsAttr >= 0 ? rowsAttr : undefined;
+    const schemaIdAttr = el.getAttribute("schema-id");
+    const schemaId = schemaIdAttr && validId(schemaIdAttr) ? schemaIdAttr : undefined;
+
+    const srcAttr = el.getAttribute("src");
+    const encoding = (el.getAttribute("encoding") ?? "").toLowerCase();
+
+    let entry: WorkbookMemory | null = null;
+
+    if (srcAttr) {
+      if (!isFetchableUrl(srcAttr)) continue;
+      const bytes = parseBytesAttr(el.getAttribute("bytes"));
+      entry = { id, schemaId, rows, source: { kind: "external", src: srcAttr, sha256, bytes } };
+    } else if (encoding === "base64") {
+      const raw = el.textContent ?? "";
+      const base64 = raw.replace(/\s+/g, "");
+      if (!base64) continue;
+      if (base64.length > MAX_INLINE_BASE64_CHARS) continue;
+      const approxBytes = Math.floor((base64.length * 3) / 4);
+      if (aggregateInlineBytes + approxBytes > MAX_AGGREGATE_INLINE_BYTES) continue;
+      aggregateInlineBytes += approxBytes;
+      entry = { id, schemaId, rows, source: { kind: "inline-base64", base64, sha256 } };
+    } else {
+      // No defined storage form. Memory blocks must be binary
+      // (Arrow IPC), so encoding="base64" or src= is required.
+      continue;
+    }
+
+    if (entry) memory.push(entry);
+  }
+
+  return { name, cells, inputs, agents, data, memory };
 }
 
 function coerceValue(raw: string, type: string): unknown {
