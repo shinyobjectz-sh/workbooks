@@ -85,38 +85,115 @@ export interface LoaderOptions {
    * host parses the manifest and returns the names. v1 caller responsibility.
    */
   extractProvides: (bytes: Uint8Array) => string[];
+  /**
+   * Cap the number of entries any one resolveAll() call will produce.
+   * Default 32. Workbooks with longer dependency lists must opt in.
+   * Prevents a malicious manifest from listing thousands of refs.
+   */
+  maxEntries?: number;
+  /**
+   * Cap the per-entry byte size. Default 25 MB. Larger upstream
+   * workbooks throw with a clear error.
+   */
+  maxBytesPerEntry?: number;
+  /**
+   * Cap the aggregate byte size across one resolveAll() call.
+   * Default 50 MB. Bounds memory blow-up regardless of entry count.
+   */
+  maxAggregateBytes?: number;
+  /**
+   * Reserved for future recursive resolution (when extractProvides
+   * exposes nested refs). Default 4. Ignored today since resolveAll
+   * is non-recursive — kept to lock the API now so the eventual
+   * recursive expansion doesn't change the option shape.
+   */
+  maxDepth?: number;
 }
+
+const DEFAULT_MAX_ENTRIES = 32;
+const DEFAULT_MAX_BYTES_PER_ENTRY = 25 * 1024 * 1024;
+const DEFAULT_MAX_AGGREGATE_BYTES = 50 * 1024 * 1024;
+const DEFAULT_MAX_DEPTH = 4;
 
 export function createCrossWorkbookLoader(opts: LoaderOptions): CrossWorkbookLoader {
   const fetchBytes = opts.fetchBytes ?? defaultFetchBytes;
+  const maxEntries = opts.maxEntries ?? DEFAULT_MAX_ENTRIES;
+  const maxBytesPerEntry = opts.maxBytesPerEntry ?? DEFAULT_MAX_BYTES_PER_ENTRY;
+  const maxAggregateBytes = opts.maxAggregateBytes ?? DEFAULT_MAX_AGGREGATE_BYTES;
+  // Reserved for future recursive resolution; kept on the options
+  // surface now so the eventual change is non-breaking.
+  void (opts.maxDepth ?? DEFAULT_MAX_DEPTH);
+
+  /** Per-resolveAll budget, threaded through resolve() calls. */
+  interface Budget {
+    aggregateBytes: number;
+  }
+
+  async function resolveOne(
+    ref: CrossWorkbookRef,
+    budget: Budget,
+  ): Promise<LockfileEntry> {
+    const url = ref.url ?? (await opts.registryResolve(ref.slug, ref.version));
+    const bytes = await fetchBytes(url);
+    if (bytes.byteLength > maxBytesPerEntry) {
+      throw new Error(
+        `cross-workbook entry exceeds size cap: ${ref.slug} ` +
+          `(${bytes.byteLength} bytes > ${maxBytesPerEntry}). ` +
+          `Pass maxBytesPerEntry to extend.`,
+      );
+    }
+    budget.aggregateBytes += bytes.byteLength;
+    if (budget.aggregateBytes > maxAggregateBytes) {
+      throw new Error(
+        `cross-workbook aggregate exceeds size cap: ` +
+          `${budget.aggregateBytes} > ${maxAggregateBytes}. ` +
+          `Pass maxAggregateBytes to extend.`,
+      );
+    }
+    const sha256 = await sha256Hex(bytes);
+    const provides = opts.extractProvides(bytes);
+    return {
+      slug: ref.slug,
+      resolved_url: url,
+      resolved_at: new Date().toISOString(),
+      sha256,
+      provides,
+    };
+  }
 
   return {
     async resolve(ref) {
-      const url = ref.url ?? (await opts.registryResolve(ref.slug, ref.version));
-      const bytes = await fetchBytes(url);
-      const sha256 = await sha256Hex(bytes);
-      const provides = opts.extractProvides(bytes);
-      return {
-        slug: ref.slug,
-        resolved_url: url,
-        resolved_at: new Date().toISOString(),
-        sha256,
-        provides,
-      };
+      // Single-ref resolve still gets per-entry + aggregate caps so
+      // direct callers (not just resolveAll) are protected.
+      return resolveOne(ref, { aggregateBytes: 0 });
     },
 
     async resolveAll(refs) {
+      if (refs.length > maxEntries) {
+        throw new Error(
+          `cross-workbook refs exceed entry cap: ` +
+            `${refs.length} > ${maxEntries}. ` +
+            `Pass maxEntries to extend.`,
+        );
+      }
+      const budget: Budget = { aggregateBytes: 0 };
       const entries: LockfileEntry[] = [];
       for (const ref of refs) {
         // Sequential to keep the registry happy + log lines ordered;
         // if registries are CDN-cached this is still <100ms per ref.
-        entries.push(await this.resolve(ref));
+        entries.push(await resolveOne(ref, budget));
       }
       return { version: 1, entries };
     },
 
     async loadPinned(entry) {
       const bytes = await fetchBytes(entry.resolved_url);
+      if (bytes.byteLength > maxBytesPerEntry) {
+        throw new Error(
+          `pinned cross-workbook entry exceeds size cap: ${entry.slug} ` +
+            `(${bytes.byteLength} bytes > ${maxBytesPerEntry})`,
+        );
+      }
       const sha = await sha256Hex(bytes);
       if (sha !== entry.sha256) {
         throw new Error(
