@@ -9,7 +9,8 @@
   },
   "homepage": "https://github.com/zaius-labs/workbooks",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "packages/runtime-wasm/examples/svelte-app"
   ],
   "scripts": {
     "build": "pnpm -r --filter ./packages/* build",
