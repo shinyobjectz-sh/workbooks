@@ -67,6 +67,10 @@
       "types": "./src/loopBlock.ts",
       "default": "./src/loopBlock.ts"
     },
+    "./crossWorkbookLoader": {
+      "types": "./src/crossWorkbookLoader.ts",
+      "default": "./src/crossWorkbookLoader.ts"
+    },
     "./runDiff": {
       "types": "./src/runDiff.ts",
       "default": "./src/runDiff.ts"

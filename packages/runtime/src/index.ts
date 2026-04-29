@@ -108,6 +108,17 @@ export type {
   ModelArtifactResolver,
 } from "./modelArtifactResolver";
 
+// Cross-workbook load + lockfile (P6.4) — pins (slug, version, sha256)
+// so re-runs are reproducible even when upstream workbooks ship updates.
+export { createCrossWorkbookLoader } from "./crossWorkbookLoader";
+export type {
+  CrossWorkbookRef,
+  CrossWorkbookLoader,
+  Lockfile,
+  LockfileEntry,
+  LoaderOptions,
+} from "./crossWorkbookLoader";
+
 // Loop block (P5.5) — schema + iteration planner. Loop execution
 // dispatch lives in the host's executor (sequential fallback for Tier 1,
 // worker-pool for Tier 3); this file owns the contract.
