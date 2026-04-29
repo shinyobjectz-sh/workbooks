@@ -18,21 +18,22 @@ path = "src/lib.rs"
 # needs in `manifest.environment.runtimeFeatures`; the bundle is built once
 # but cells only load the slices their workbook references.
 #
-# Default targets ~3-5 MB compressed. Polars covers OLAP via lazy LazyFrame
-# + SQL frontend, sqlite covers small structured state, plotters covers
-# charts, rhai covers scripting. DuckDB is opt-in (lazy-loaded chunk for
-# workbooks that explicitly need DuckDB-only SQL features).
+# Default targets ~2-3 MB brotli. Polars covers OLAP via lazy LazyFrame +
+# SQL frontend; plotters covers charts; rhai covers scripting. SQLite +
+# DuckDB are NOT compiled into this Rust crate — they're sidecar JS
+# modules (`@sqlite.org/sqlite-wasm`, `@duckdb/duckdb-wasm`) lazy-loaded
+# from the JS bridge when a cell explicitly needs them. This avoids the
+# wasi-sdk dependency Rust-bundled SQLite/DuckDB would require.
 #
-# NOTE: Polars + SQLite-via-rusqlite have known wasm32 build complications
-# (parquet/lz4 C deps for Polars; SQLite C source for rusqlite). They're
-# wired up but excluded from the *default* feature set during P2.2 baseline;
-# enable explicitly to opt in. See README "Building" for the matrix.
-default = ["charts", "rhai-glue"]
+# Polars carries a wasm32-friendly feature subset (no parquet/dtype-full,
+# which need lz4-sys / zstd-sys C deps that themselves need a wasi sysroot).
+# Add `polars-parquet` later once we ship a wasi-sdk story.
+default = ["polars-frames", "charts", "rhai-glue"]
 
-# Data layer
+# Data layer (Rust-bundled — currently only Polars). SQLite + DuckDB are
+# JS-side via @sqlite.org/sqlite-wasm and @duckdb/duckdb-wasm respectively;
+# wired through the runtime bridge, not this crate.
 polars-frames = ["dep:polars"]
-sqlite = ["dep:rusqlite"]
-duckdb = ["dep:duckdb"]                 # opt-in — lazy-loaded chunk
 
 # Visualization
 charts = ["dep:plotters"]
@@ -63,7 +64,7 @@ image-ops = ["dep:image"]
 
 # Everything — convenience for development
 all = [
-  "polars-frames", "charts", "rhai-glue", "sqlite", "duckdb",
+  "polars-frames", "charts", "rhai-glue",
   "candle", "linfa", "burn", "stats", "vectors",
   "tokenizers", "image-ops",
 ]
@@ -85,8 +86,6 @@ serde-wasm-bindgen = "0.6"
 arrow = { version = "53", default-features = false, features = ["ipc"] }
 
 # Optional feature crates (gated above)
-duckdb = { version = "1", optional = true, default-features = false, features = ["bundled"] }
-rusqlite = { version = "0.32", optional = true, default-features = false, features = ["bundled", "serde_json"] }
 polars = { version = "0.45", optional = true, default-features = false, features = [
   # Conservative wasm32-friendly set: lazy + CSV + JSON + strings/temporal +
   # SQL frontend. Parquet and dtype-full pull in lz4-sys / zstd-sys C deps

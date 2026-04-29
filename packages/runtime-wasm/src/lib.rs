@@ -44,12 +44,6 @@ pub mod bridge;
 pub mod runtime;
 pub mod outputs;
 
-#[cfg(feature = "duckdb")]
-pub mod duckdb;
-
-#[cfg(feature = "sqlite")]
-pub mod sqlite;
-
 #[cfg(feature = "polars-frames")]
 pub mod frames;
 
@@ -88,10 +82,6 @@ pub fn build_info() -> JsValue {
 
 fn active_features() -> Vec<&'static str> {
     let mut features: Vec<&'static str> = Vec::new();
-    #[cfg(feature = "duckdb")]
-    features.push("duckdb");
-    #[cfg(feature = "sqlite")]
-    features.push("sqlite");
     #[cfg(feature = "polars-frames")]
     features.push("polars");
     #[cfg(feature = "charts")]
