@@ -101,6 +101,35 @@ interface WorkbookHtmlSpec {
   agents: AgentSpec[];
 }
 
+/**
+ * Workbook identifier shape — used for cell ids, input names, agent
+ * ids, and any other slot whose value flows into a CSS attribute
+ * selector or HTML attribute. Locked to a conservative shape so the
+ * later querySelectorAll(`wb-output[for="${id}"]`) call sites can't
+ * be tricked into matching unintended nodes.
+ *
+ * Letters, digits, underscore, hyphen. Must start with a letter.
+ * Max 64 characters. Enough for human-readable ids; rejects any
+ * character that has special meaning in attribute selectors
+ * (`"]`, `,`, whitespace, etc.). closes core-0id.3
+ */
+const VALID_ID = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
+
+function validId(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  return VALID_ID.test(raw) ? raw : null;
+}
+
+/** Normalize comma/whitespace-separated ids; reject any malformed token. */
+function validIdList(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .filter((s) => VALID_ID.test(s));
+}
+
 export function parseWorkbookHtml(root: Element): WorkbookHtmlSpec {
   const name = root.getAttribute("name") ?? "html-workbook";
   const cells: Cell[] = [];
@@ -109,7 +138,7 @@ export function parseWorkbookHtml(root: Element): WorkbookHtmlSpec {
 
   // Inputs.
   for (const el of root.querySelectorAll("wb-input")) {
-    const nm = el.getAttribute("name");
+    const nm = validId(el.getAttribute("name"));
     if (!nm) continue;
     const type = el.getAttribute("type") ?? "text";
     const def = el.getAttribute("default") ?? el.textContent?.trim() ?? "";
@@ -118,17 +147,12 @@ export function parseWorkbookHtml(root: Element): WorkbookHtmlSpec {
 
   // Cells.
   for (const el of root.querySelectorAll("wb-cell")) {
-    const id = el.getAttribute("id");
-    const language = (el.getAttribute("language") as CellLanguage) ?? "rhai";
+    const id = validId(el.getAttribute("id"));
     if (!id) continue;
-    const reads = (el.getAttribute("reads") ?? "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    const provides = (el.getAttribute("provides") ?? id)
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const language = (el.getAttribute("language") as CellLanguage) ?? "rhai";
+    const reads = validIdList(el.getAttribute("reads"));
+    const provides = validIdList(el.getAttribute("provides"));
+    if (!provides.length) provides.push(id);
     const source = el.textContent?.trim() ?? "";
     const cell: Cell = { id, language, source, dependsOn: reads, provides };
     cells.push(cell);
@@ -136,17 +160,14 @@ export function parseWorkbookHtml(root: Element): WorkbookHtmlSpec {
 
   // Agents.
   for (const el of root.querySelectorAll("wb-agent")) {
-    const id = el.getAttribute("id");
+    const id = validId(el.getAttribute("id"));
     if (!id) continue;
     const model = el.getAttribute("model") ?? "openai/gpt-4o-mini";
-    const reads = (el.getAttribute("reads") ?? "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const reads = validIdList(el.getAttribute("reads"));
     const systemEl = el.querySelector("wb-system");
     const systemPrompt = systemEl?.textContent?.trim() ?? "";
     const tools = [...el.querySelectorAll("wb-tool")]
-      .map((t) => t.getAttribute("ref"))
+      .map((t) => validId(t.getAttribute("ref")))
       .filter((s): s is string => Boolean(s));
     agents.push({ id, model, systemPrompt, reads, tools });
   }
@@ -227,8 +248,11 @@ export async function mountHtmlWorkbook(opts: MountOptions): Promise<{
       if (state.status === "ok" && state.outputs) {
         outputCache.set(state.cellId, state.outputs);
       }
-      // Push to any <wb-output for="cellId"> elements.
-      for (const out of doc.querySelectorAll(`wb-output[for="${state.cellId}"]`)) {
+      // Push to any <wb-output for="cellId"> elements. cellId is
+      // already locked to VALID_ID at parse time (core-0id.3) but
+      // CSS.escape is cheap defense-in-depth — guarantees the
+      // selector can't be tricked even if parser validation regresses.
+      for (const out of doc.querySelectorAll(`wb-output[for="${CSS.escape(state.cellId)}"]`)) {
         renderOutputElement(out as HTMLElement, state, spec.cells);
       }
     },
@@ -485,8 +509,10 @@ async function runAgentOnce(
     tools: [], // tool-use agent layer comes next
   });
 
-  // Find the matching <wb-output for=agent.id> and update.
-  const outputs = document.querySelectorAll(`wb-output[for="${agent.id}"]`);
+  // Find the matching <wb-output for=agent.id> and update. agent.id
+  // is locked to VALID_ID at parse time (core-0id.3); CSS.escape is
+  // defense-in-depth.
+  const outputs = document.querySelectorAll(`wb-output[for="${CSS.escape(agent.id)}"]`);
   for (const o of outputs) {
     (o as HTMLElement).innerHTML = "";
     const div = document.createElement("div");
