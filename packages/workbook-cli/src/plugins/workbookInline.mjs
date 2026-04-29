@@ -196,7 +196,10 @@ async function loadRuntime() {
     const wasmBytes = base64ToBytes(wasmEl.textContent);
     const bindgenUrl = URL.createObjectURL(new Blob([bindgenEl.textContent], { type: "application/javascript" }));
     wasm = await import(/* @vite-ignore */ bindgenUrl);
-    await wasm.default(wasmBytes);
+    // wasm-bindgen 0.2.93+ deprecates the positional init form. The
+    // object form (module_or_path) is supported back to ~0.2.86, so
+    // it works against any runtime we're realistically going to ship.
+    await wasm.default({ module_or_path: wasmBytes });
     URL.revokeObjectURL(bindgenUrl);
     const bundleUrl = URL.createObjectURL(new Blob([bundleEl.textContent], { type: "application/javascript" }));
     bundle = await import(/* @vite-ignore */ bundleUrl);
@@ -205,7 +208,7 @@ async function loadRuntime() {
     // Build URLs at runtime so the bundler doesn't try to resolve them.
     const base = "/" + "_" + "_workbook/";
     wasm = await import(/* @vite-ignore */ base + "bindgen.js");
-    await wasm.default(base + "runtime.wasm");
+    await wasm.default({ module_or_path: base + "runtime.wasm" });
     bundle = await import(/* @vite-ignore */ base + "bundle.js");
   }
   _cached = { wasm, bundle };
@@ -228,6 +231,13 @@ export default function workbookInline({ config, runtimeOverride } = {}) {
 
     async configResolved(c) {
       resolvedConfig = c;
+      // When inlining is disabled (e.g. `workbook build --no-wasm` for
+      // SPA workbooks that don't embed the runtime), skip the runtime
+      // resolve entirely. Otherwise the build fails with "could not
+      // locate workbook-runtime-wasm pkg/ output" even though the
+      // resolved bytes are never used. The downstream `transformIndexHtml`
+      // already short-circuits at `inlineRuntime === false`.
+      if (config.inlineRuntime === false) return;
       runtime = await resolveRuntime({ override: runtimeOverride });
     },
 
