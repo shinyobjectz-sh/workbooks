@@ -49,19 +49,20 @@ export interface Environment {
 }
 
 /**
- * Cell output. Mirrors the discriminated union in src/outputs.rs:
- *   { kind: "Text",  content, mime_type? }
- *   { kind: "Image", content (base64), mime_type }
- *   { kind: "Table", sql_table, row_count? }
- *   { kind: "Error", message, traceback? }
- *   { kind: "Stream", content }
+ * Cell output. Mirrors the discriminated union in src/outputs.rs.
+ * Variants serialize as snake_case via serde's `rename_all = "snake_case"`:
+ *   { kind: "text",   content, mime_type? }
+ *   { kind: "image",  content (base64), mime_type }
+ *   { kind: "table",  sql_table, row_count? }
+ *   { kind: "error",  message, traceback? }
+ *   { kind: "stream", content }
  */
 export type CellOutput =
-  | { kind: "Text"; content: string; mime_type?: string }
-  | { kind: "Image"; content: string; mime_type: string }
-  | { kind: "Table"; sql_table: string; row_count?: number }
-  | { kind: "Error"; message: string; traceback?: string }
-  | { kind: "Stream"; content: string };
+  | { kind: "text"; content: string; mime_type?: string }
+  | { kind: "image"; content: string; mime_type: string }
+  | { kind: "table"; sql_table: string; row_count?: number }
+  | { kind: "error"; message: string; traceback?: string }
+  | { kind: "stream"; content: string };
 
 /**
  * Init payload. The Rust runtime side accepts the same shape via

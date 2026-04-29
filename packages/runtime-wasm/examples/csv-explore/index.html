@@ -131,9 +131,9 @@ ORDER BY total_revenue DESC</textarea>
     function renderOutputs(outputs) {
       out.innerHTML = "";
       for (const output of outputs) {
-        if (output.kind === "Text" && output.mime_type === "text/csv") {
+        if (output.kind === "text" && output.mime_type === "text/csv") {
           out.appendChild(csvToTable(output.content));
-        } else if (output.kind === "Error") {
+        } else if (output.kind === "error") {
           const div = document.createElement("div");
           div.className = "err";
           div.textContent = output.message + (output.traceback ? "\n\n" + output.traceback : "");
