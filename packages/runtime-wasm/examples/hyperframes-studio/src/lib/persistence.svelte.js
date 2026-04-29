@@ -127,11 +127,36 @@ async function flush() {
   const round = Array.from(pending.entries());
   pending.clear();
   try {
-    await Promise.all(round.map(([id, getValue]) => saveState(id, getValue())));
+    // getValue() may return null if its backend isn't ready yet
+    // (e.g. Loro doc still bootstrapping when the debounce fires).
+    // Skip those — the next mutation will mark dirty again. Without
+    // this skip, a null overwrite would wipe whatever valid state
+    // had been saved earlier.
+    const writes = [];
+    const requeue = [];
+    for (const [id, getValue] of round) {
+      let value;
+      try { value = getValue(); } catch (e) {
+        console.warn(`hf persistence: getValue('${id}') threw:`, e?.message ?? e);
+        continue;
+      }
+      if (value === null || value === undefined) {
+        // Backend wasn't ready — re-queue so the next debounce window
+        // catches the now-ready state.
+        requeue.push([id, getValue]);
+        continue;
+      }
+      writes.push(saveState(id, value));
+    }
+    await Promise.all(writes);
+    for (const [id, getValue] of requeue) {
+      pending.set(id, getValue);
+    }
     lastError = null;
     saving = false;
     if (pending.size > 0) {
-      // More dirty marks landed during the save — kick another round.
+      // More dirty marks landed during the save (or pending re-queues
+      // from above) — kick another round.
       schedule();
       return;
     }

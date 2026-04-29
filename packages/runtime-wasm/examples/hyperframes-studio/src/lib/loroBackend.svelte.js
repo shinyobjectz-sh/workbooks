@@ -150,8 +150,11 @@ function diffShrink(oldStr, newStr) {
 
 /** Apply a new composition html as Loro Text ops + commit. The
  *  snapshot save is debounced via markDirty in the persistence
- *  coordinator. Safe to call before bootstrap (no-op until ready). */
-export function writeComposition(html) {
+ *  coordinator. Awaits bootstrap so writes that fire before the
+ *  Loro WASM finishes loading are queued and applied as soon as
+ *  the doc is ready (instead of silently dropping). */
+export async function writeComposition(html) {
+  await bootstrapLoro();
   if (!_doc) return;
   const next = String(html ?? "");
   const text = _doc.getText("composition");
@@ -192,8 +195,10 @@ export function readAssets() {
   return out;
 }
 
-/** Append one asset to the list. */
-export function pushAsset(asset) {
+/** Append one asset to the list. Awaits bootstrap so pre-init
+ *  pushes don't silently drop. */
+export async function pushAsset(asset) {
+  await bootstrapLoro();
   if (!_doc) return;
   _doc.getList("assets").push(JSON.stringify(asset));
   _doc.commit();
@@ -202,7 +207,8 @@ export function pushAsset(asset) {
 
 /** Remove an asset by id — walks the list, finds the first matching
  *  entry, deletes it. No-op if not found. */
-export function removeAssetById(id) {
+export async function removeAssetById(id) {
+  await bootstrapLoro();
   if (!_doc) return;
   const list = _doc.getList("assets");
   const arr = list.toArray();
@@ -223,7 +229,8 @@ export function removeAssetById(id) {
 
 /** Replace the entire asset list in one commit. Used by import flows
  *  that swap state wholesale. */
-export function replaceAssets(items) {
+export async function replaceAssets(items) {
+  await bootstrapLoro();
   if (!_doc) return;
   const list = _doc.getList("assets");
   if (list.length > 0) list.delete(0, list.length);
