@@ -196,15 +196,44 @@ export function createRuntimeClient(opts: RuntimeClientOptions): RuntimeClient {
       if (lang === "polars") {
         if (!wasm.runPolarsSql) throw new Error("runtime built without polars-frames feature");
         const sql = req.cell.source ?? "";
-        const csv = (req.params?.csv as string | undefined) ?? "";
+        // Pick CSV from params in this priority order:
+        //   1. Explicit `params.csv` (legacy: `<wb-input name="csv">`).
+        //   2. The first `reads=` ref whose param is a string —
+        //      i.e. a `<wb-data mime="text/csv">` referenced by id.
+        // This lets authors write `reads="orders"` instead of plumbing
+        // the reserved `csv` name everywhere.
+        let csv = (req.params?.csv as string | undefined) ?? "";
+        if (!csv && req.params && req.cell.dependsOn) {
+          for (const dep of req.cell.dependsOn) {
+            const v = req.params[dep];
+            if (typeof v === "string" && v.length > 0) {
+              csv = v;
+              break;
+            }
+          }
+        }
         const outputs = wasm.runPolarsSql(sql, csv);
         return { outputs };
       }
 
       if (lang === "sqlite") {
-        // P2.5+: lazy-load @sqlite.org/sqlite-wasm here, run query, return
-        // outputs. Stubbed today — see docs/RUST_RUNTIME.md.
-        throw new Error("sqlite cell dispatcher not yet wired (P2.5)");
+        // The SQLite engine is a JS-side sidecar (@sqlite.org/sqlite-wasm),
+        // not a Rust-bundled feature. Dispatcher lazy-loads on first hit
+        // and accepts a database file via reads= → <wb-data mime=
+        // "application/x-sqlite3">. Wiring lands in a follow-up commit
+        // alongside the sidecar integration.
+        const hasDbBytes =
+          !!req.params &&
+          !!req.cell.dependsOn?.some((d) => req.params?.[d] instanceof Uint8Array);
+        throw new Error(
+          hasDbBytes
+            ? "sqlite cell dispatcher not yet wired — database bytes are " +
+                "available via reads= but the @sqlite.org/sqlite-wasm sidecar " +
+                "isn't integrated yet"
+            : "sqlite cells require a `reads=` reference to a " +
+                "<wb-data mime=\"application/x-sqlite3\"> block holding the " +
+                "database bytes",
+        );
       }
 
       // duckdb dispatch removed (core-0id.7). Polars-SQL covers analytical
