@@ -155,7 +155,47 @@ function validIdList(raw: string | null | undefined): string[] {
     .split(/[,\s]+/)
     .map((s) => s.trim())
     .filter(Boolean)
-    .filter((s) => VALID_ID.test(s));
+    .filter((s) => VALID_ID.test(s))
+    .slice(0, MAX_REFS_PER_LIST);
+}
+
+// ----------------------------------------------------------------------
+// Schema caps. Defense-in-depth against pathological workbook inputs —
+// a malicious or buggy workbook can't blow up parser memory or slip
+// unrecognized cell languages into the runtime dispatch. closes core-0id.12
+// ----------------------------------------------------------------------
+
+const ALLOWED_LANGUAGES = new Set<CellLanguage>([
+  "rhai",
+  "polars",
+  "sqlite",
+  "candle-inference",
+  "linfa-train",
+  "wasm-fn",
+  "chat",
+]);
+
+/**
+ * Permissive enough to cover OpenRouter slugs (`openai/gpt-4o-mini`,
+ * `anthropic/claude-sonnet-4-6`), HuggingFace ids
+ * (`sentence-transformers/all-MiniLM-L6-v2`), version suffixes,
+ * and dotted/colon variants — but rejects whitespace, quotes, angle
+ * brackets, and any other character that has parsing meaning.
+ */
+const VALID_MODEL = /^[A-Za-z0-9._/:@-]{1,128}$/;
+
+const MAX_CELLS = 256;
+const MAX_INPUTS = 64;
+const MAX_AGENTS = 32;
+const MAX_TOOLS_PER_AGENT = 16;
+const MAX_REFS_PER_LIST = 32;
+const MAX_SOURCE_BYTES = 1 * 1024 * 1024;       // 1 MB per cell source
+const MAX_SYSTEM_PROMPT_BYTES = 100 * 1024;     // 100 KB per agent prompt
+const MAX_INPUT_DEFAULT_BYTES = 16 * 1024;      // 16 KB per input default
+
+function clipString(raw: string, maxBytes: number): string {
+  if (raw.length <= maxBytes) return raw;
+  return raw.slice(0, maxBytes);
 }
 
 export function parseWorkbookHtml(root: Element): WorkbookHtmlSpec {
@@ -166,37 +206,49 @@ export function parseWorkbookHtml(root: Element): WorkbookHtmlSpec {
 
   // Inputs.
   for (const el of root.querySelectorAll("wb-input")) {
+    if (Object.keys(inputs).length >= MAX_INPUTS) break;
     const nm = validId(el.getAttribute("name"));
     if (!nm) continue;
     const type = el.getAttribute("type") ?? "text";
-    const def = el.getAttribute("default") ?? el.textContent?.trim() ?? "";
+    const rawDef = el.getAttribute("default") ?? el.textContent?.trim() ?? "";
+    const def = clipString(rawDef, MAX_INPUT_DEFAULT_BYTES);
     inputs[nm] = coerceValue(def, type);
   }
 
   // Cells.
   for (const el of root.querySelectorAll("wb-cell")) {
+    if (cells.length >= MAX_CELLS) break;
     const id = validId(el.getAttribute("id"));
     if (!id) continue;
-    const language = (el.getAttribute("language") as CellLanguage) ?? "rhai";
+    const rawLang = el.getAttribute("language") ?? "rhai";
+    if (!ALLOWED_LANGUAGES.has(rawLang as CellLanguage)) continue;
+    const language = rawLang as CellLanguage;
     const reads = validIdList(el.getAttribute("reads"));
     const provides = validIdList(el.getAttribute("provides"));
     if (!provides.length) provides.push(id);
-    const source = el.textContent?.trim() ?? "";
+    const source = clipString(el.textContent?.trim() ?? "", MAX_SOURCE_BYTES);
     const cell: Cell = { id, language, source, dependsOn: reads, provides };
     cells.push(cell);
   }
 
   // Agents.
   for (const el of root.querySelectorAll("wb-agent")) {
+    if (agents.length >= MAX_AGENTS) break;
     const id = validId(el.getAttribute("id"));
     if (!id) continue;
-    const model = el.getAttribute("model") ?? "openai/gpt-4o-mini";
+    const rawModel = el.getAttribute("model") ?? "openai/gpt-4o-mini";
+    if (!VALID_MODEL.test(rawModel)) continue;
+    const model = rawModel;
     const reads = validIdList(el.getAttribute("reads"));
     const systemEl = el.querySelector("wb-system");
-    const systemPrompt = systemEl?.textContent?.trim() ?? "";
+    const systemPrompt = clipString(
+      systemEl?.textContent?.trim() ?? "",
+      MAX_SYSTEM_PROMPT_BYTES,
+    );
     const tools = [...el.querySelectorAll("wb-tool")]
       .map((t) => validId(t.getAttribute("ref")))
-      .filter((s): s is string => Boolean(s));
+      .filter((s): s is string => Boolean(s))
+      .slice(0, MAX_TOOLS_PER_AGENT);
     agents.push({ id, model, systemPrompt, reads, tools });
   }
 
