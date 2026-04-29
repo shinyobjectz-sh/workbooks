@@ -2,6 +2,7 @@
   import ChatPanel from "./ChatPanel.svelte";
   import AssetsPanel from "./AssetsPanel.svelte";
   import MCPPanel from "./MCPPanel.svelte";
+  import HistoryPanel from "./HistoryPanel.svelte";
   import { layout } from "../lib/layout.svelte.js";
 
   // The active tab is driven from the global header
@@ -20,6 +21,9 @@
   </div>
   <div class="flex-1 flex flex-col min-h-0" class:hidden={layout.leftTab !== "mcp"}>
     <MCPPanel />
+  </div>
+  <div class="flex-1 flex flex-col min-h-0" class:hidden={layout.leftTab !== "history"}>
+    <HistoryPanel />
   </div>
 </section>
 

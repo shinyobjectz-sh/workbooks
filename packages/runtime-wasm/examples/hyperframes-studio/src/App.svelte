@@ -136,6 +136,22 @@
       </svg>
       <span>mcp</span>
     </button>
+    <button
+      onclick={() => layout.setLeftTab("history")}
+      class="nav-tab"
+      class:active={layout.leftTab === "history"}
+      aria-pressed={layout.leftTab === "history"}
+      title="Edit log — Prolly Tree commit chain"
+    >
+      <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="7" cy="3" r="1.2"/>
+        <circle cx="7" cy="7" r="1.2"/>
+        <circle cx="7" cy="11" r="1.2"/>
+        <path d="M7 4.2 L7 5.8"/>
+        <path d="M7 8.2 L7 9.8"/>
+      </svg>
+      <span>history</span>
+    </button>
 
     <span class="flex-1"></span>
 

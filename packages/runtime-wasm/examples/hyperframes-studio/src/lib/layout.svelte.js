@@ -8,7 +8,7 @@ const KEY_PPS      = "hf.layout.pps";
 const KEY_ASPECT   = "hf.layout.aspect";
 const KEY_LEFT_TAB = "hf.layout.leftTab";
 
-export const LEFT_TABS = ["chat", "assets", "mcp"];
+export const LEFT_TABS = ["chat", "assets", "mcp", "history"];
 
 // Standard social/cinematic aspect ratios. Order = display order
 // in the picker. Stored as the "w:h" string so it round-trips
