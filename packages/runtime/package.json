@@ -35,6 +35,10 @@
       "svelte": "./src/blockRegistry.ts",
       "types": "./src/blockRegistry.ts"
     },
+    "./types": {
+      "types": "./src/types.ts",
+      "default": "./src/types.ts"
+    },
     "./blocks/*": {
       "svelte": "./src/blocks/*"
     },
