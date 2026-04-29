@@ -2,68 +2,52 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>workbook-runtime: Candle ops (T1.1)</title>
-  <style>
-    :root { color-scheme: light; }
-    * { box-sizing: border-box; }
-    body {
-      font-family: ui-sans-serif, system-ui, sans-serif;
-      max-width: 880px;
-      margin: 2rem auto;
-      padding: 0 1rem;
-      line-height: 1.5;
-    }
-    .meta { color: #666; font-size: 0.875rem; }
-    .controls { display: flex; gap: 1rem; align-items: center; margin: 1rem 0; }
-    label { font-weight: 600; }
-    input[type="number"] { padding: 0.4rem; width: 6rem; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; }
-    button { padding: 0.5rem 1rem; cursor: pointer; font-size: 14px; background: #111; color: white; border: 0; border-radius: 4px; }
-    button:disabled { opacity: 0.5; cursor: wait; }
-    .panel {
-      border: 1px solid #ddd; border-radius: 6px; padding: 0.75rem 1rem; margin: 0.75rem 0;
-    }
-    .panel h3 { margin: 0 0 0.5rem 0; font-size: 14px; font-family: ui-monospace, monospace; }
-    .timing-pair { display: flex; gap: 2rem; align-items: baseline; }
-    .timing-pair .label { font-size: 12px; color: #666; min-width: 4.5rem; }
-    .timing-pair .ms { font-family: ui-monospace, monospace; font-size: 14px; font-weight: 600; }
-    .timing-pair .speedup { font-size: 12px; color: #888; }
-    .speedup.ok { color: #27ae60; }
-    .speedup.bad { color: #c0392b; }
-    .sample { font-family: ui-monospace, monospace; font-size: 12px; color: #444; margin-top: 0.5rem; }
-    pre.info { background: #f5f5f5; padding: 1rem; border-radius: 4px; }
-  </style>
+  <title>workbook/runtime — tensor ops</title>
+  <link rel="stylesheet" href="../_shared/design.css" />
 </head>
 <body>
-  <h1>workbook-runtime: Candle ops</h1>
-  <p class="meta">
-    Heavier than the smoke test — measures wall-clock for matmul, softmax,
-    and conv2d running through Candle in the browser, with a JS reference
-    baseline alongside. Proves the runtime supports real ML compute, not
-    just toy ops.
-  </p>
+  <main class="wb-page">
+    <header class="wb-hero">
+      <div class="eyebrow">T1.1 · tensors</div>
+      <h1>Real ML compute, browser-side.</h1>
+      <p>
+        <code>matmul</code> · <code>softmax</code> · <code>conv2d</code> through
+        Candle, timed against a naive JavaScript baseline. The wasm path
+        wins decisively at scale where SIMD pays for itself.
+      </p>
+    </header>
 
-  <div class="controls">
-    <label for="n">matmul N =</label>
-    <input id="n" type="number" value="256" min="32" max="1024" step="32" />
-    <button id="run">Run ops</button>
-    <span id="status" class="meta"></span>
-  </div>
+    <section class="wb-section">
+      <div class="wb-controls">
+        <span class="wb-field">
+          <label>matmul N</label>
+          <input id="n" class="wb-input num" type="number" value="256" min="32" max="1024" step="32" />
+        </span>
+        <button id="run" class="wb-btn run">Run ops</button>
+        <span id="status" class="wb-muted wb-mono" style="font-size: var(--t-sm);"></span>
+      </div>
+    </section>
 
-  <div id="results"></div>
+    <section class="wb-section">
+      <div id="results"></div>
+    </section>
 
-  <h3 style="margin-top: 2rem;">Build info</h3>
-  <pre class="info" id="info">loading…</pre>
+    <section class="wb-section">
+      <h2 class="wb-section-title">Build info</h2>
+      <div id="info"></div>
+    </section>
+  </main>
 
   <script type="module">
     import init, { runCandleOps, build_info } from "../../pkg/workbook_runtime.js";
+    import { mountChrome, renderBuildInfo } from "../_shared/chrome.js";
+
+    mountChrome({ slug: "candle-ops" });
 
     const t0 = performance.now();
     await init();
-    const t1 = performance.now();
-    document.getElementById("info").textContent = JSON.stringify(
-      { ...build_info(), cold_start_ms: Math.round(t1 - t0) },
-      null, 2,
-    );
+    const coldStartMs = Math.round(performance.now() - t0);
+    renderBuildInfo("info", build_info(), coldStartMs);
 
     const button = document.getElementById("run");
     const status = document.getElementById("status");
@@ -74,36 +58,29 @@
       button.disabled = true;
       status.textContent = "running…";
       try {
-        // Run JS reference matmul first so the wasm side benefits from
-        // already-warm JIT / paging. Both run on the same n.
         const jsRef = runJsReference(n);
 
         const start = performance.now();
         const wasm = runCandleOps(n);
         const totalMs = (performance.now() - start).toFixed(2);
-        status.textContent = `done in ${totalMs}ms`;
+        status.textContent = `${totalMs} ms`;
 
         renderResults(wasm, jsRef);
       } catch (e) {
         status.textContent = "(failed)";
-        results.innerHTML = `<pre style="color:#c0392b">${String(e)}</pre>`;
+        results.innerHTML = `<div class="wb-out error">${String(e)}</div>`;
       } finally {
         button.disabled = false;
       }
     });
 
     function runJsReference(n) {
-      // Naive O(n^3) matmul + softmax + conv2d in plain JS for comparison.
-      // Same deterministic stride pattern as the Rust side so the input
-      // sizes match exactly.
       const a = new Float32Array(n * n);
       const b = new Float32Array(n * n);
       for (let i = 0; i < n * n; i++) {
         a[i] = (i % 17) * 0.05 - 0.4;
         b[i] = ((i * 3) % 13) * 0.1 - 0.6;
       }
-
-      // Matmul
       const cMat = new Float32Array(n * n);
       const t0 = performance.now();
       for (let i = 0; i < n; i++) {
@@ -115,7 +92,6 @@
       }
       const matmulMs = performance.now() - t0;
 
-      // Softmax 1024
       const v = new Float32Array(1024);
       for (let i = 0; i < 1024; i++) v[i] = Math.sin(i * 0.01);
       const t1 = performance.now();
@@ -127,7 +103,6 @@
       for (let i = 0; i < v.length; i++) sm[i] /= sum;
       const softmaxMs = performance.now() - t1;
 
-      // Conv2d 1x3x32x32 × 8x3x3x3
       const inH = 32, inW = 32, inC = 3;
       const kH = 3, kW = 3, outC = 8;
       const outH = inH - kH + 1, outW = inW - kW + 1;
@@ -166,7 +141,7 @@
     function renderResults(wasm, js) {
       results.innerHTML = "";
       for (const [op, label] of [
-        ["matmul", `matmul ${wasm.matmul.shape[0]}×${wasm.matmul.shape[1]}`],
+        ["matmul", `matmul ${wasm.matmul.shape[0]} × ${wasm.matmul.shape[1]}`],
         ["softmax", `softmax 1024`],
         ["conv2d", `conv2d 1×3×32×32 → 1×8×30×30`],
       ]) {
@@ -174,24 +149,29 @@
         const j = js[op];
         const wMs = w.ms.toFixed(2);
         const jMs = j.ms.toFixed(2);
-        const speedup = j.ms / w.ms;
-        const speedupClass = speedup >= 1 ? "ok" : "bad";
-        const speedupStr = speedup >= 1
-          ? `${speedup.toFixed(1)}× faster than JS`
-          : `${(1 / speedup).toFixed(1)}× slower than JS`;
-        const panel = document.createElement("div");
-        panel.className = "panel";
-        panel.innerHTML = `
-          <h3>${label}</h3>
-          <div class="timing-pair">
-            <div><span class="label">wasm:</span> <span class="ms">${wMs} ms</span></div>
-            <div><span class="label">js ref:</span> <span class="ms">${jMs} ms</span></div>
-            <div><span class="speedup ${speedupClass}">${speedupStr}</span></div>
+        const ratio = j.ms / w.ms;
+        const fast = ratio >= 1;
+        const ratioStr = fast
+          ? `${ratio.toFixed(1)}× faster`
+          : `${(1 / ratio).toFixed(1)}× slower`;
+        const ratioColor = fast ? "var(--ok)" : "var(--err)";
+        const card = document.createElement("div");
+        card.className = "wb-card";
+        card.innerHTML = `
+          <div class="wb-card-header">
+            <span class="wb-card-title">${label}</span>
+            <span class="wb-mono" style="color: ${ratioColor}; font-size: var(--t-sm);">${ratioStr}</span>
           </div>
-          <div class="sample">first 4 outputs (wasm): [${w.sample.map((x) => x.toFixed(4)).join(", ")}]</div>
-          <div class="sample">first 4 outputs (js):   [${j.sample.map((x) => x.toFixed(4)).join(", ")}]</div>
+          <div class="wb-tag-row">
+            <span class="wb-tag"><span>wasm</span><strong>${wMs} ms</strong></span>
+            <span class="wb-tag"><span>js</span><strong>${jMs} ms</strong></span>
+          </div>
+          <div style="margin-top: var(--s-3); font-family: var(--font-mono); font-size: var(--t-xs); color: var(--ink-3);">
+            <div>wasm[0..4] = [${w.sample.map((x) => x.toFixed(4)).join(", ")}]</div>
+            <div>js[0..4]   = [${j.sample.map((x) => x.toFixed(4)).join(", ")}]</div>
+          </div>
         `;
-        results.appendChild(panel);
+        results.appendChild(card);
       }
     }
   </script>

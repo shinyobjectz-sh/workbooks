@@ -4,3 +4,10 @@
 export { createRuntimeClient } from "../../../runtime/src/wasmBridge";
 export { analyzeCell } from "../../../runtime/src/cellAnalyzer";
 export { ReactiveExecutor } from "../../../runtime/src/reactiveExecutor";
+export { createBrowserLlmClient } from "../../../runtime/src/llmClient";
+export { runAgentLoop } from "../../../runtime/src/agentLoop";
+export {
+  mountHtmlWorkbook,
+  parseWorkbookHtml,
+  registerWorkbookCell,
+} from "../../../runtime/src/htmlBindings";

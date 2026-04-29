@@ -62,6 +62,9 @@ pub mod train;
 #[cfg(feature = "vectors")]
 pub mod vectors;
 
+#[cfg(feature = "embeddings")]
+pub mod embed;
+
 /// Library-load hook. Wires up panic forwarding to the JS console so a panic
 /// in any cell surfaces as a readable error in the workbook UI rather than a
 /// silent abort.
@@ -74,13 +77,17 @@ pub fn on_load() {
 /// `runtime.bundleVersion` and `runtime.contractVersion`.
 #[wasm_bindgen]
 pub fn build_info() -> JsValue {
+    use serde::Serialize;
     let info = serde_json::json!({
         "name": env!("CARGO_PKG_NAME"),
         "version": env!("CARGO_PKG_VERSION"),
         "contract_version": "1.0",
         "features": active_features(),
     });
-    serde_wasm_bindgen::to_value(&info).unwrap_or(JsValue::NULL)
+    // Serialize JSON Object as a JS plain object (default is Map),
+    // so callers can do `info.contract_version` not `info.get(...)`.
+    let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+    info.serialize(&serializer).unwrap_or(JsValue::NULL)
 }
 
 fn active_features() -> Vec<&'static str> {

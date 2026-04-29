@@ -2,112 +2,122 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>workbook-runtime: reactive cells (P3.4 + P3.7)</title>
+  <title>workbook/runtime — reactive cells</title>
+  <link rel="stylesheet" href="../_shared/design.css" />
   <style>
-    :root { color-scheme: light; }
-    * { box-sizing: border-box; }
-    body {
-      font-family: ui-sans-serif, system-ui, sans-serif;
-      max-width: 880px;
-      margin: 2rem auto;
-      padding: 0 1rem;
-      line-height: 1.5;
-    }
-    .meta { color: #666; font-size: 0.875rem; }
-    .input-row { display: flex; gap: 1rem; align-items: center; margin: 1rem 0; }
-    .input-row label { font-weight: 600; min-width: 4rem; }
-    input[type="number"] { padding: 0.4rem; font-size: 14px; width: 6rem; border: 1px solid #ccc; border-radius: 4px; }
     .cell {
-      border: 1px solid #ddd;
-      border-radius: 6px;
-      padding: 0.75rem 1rem;
-      margin: 0.75rem 0;
-      transition: border-color 0.15s;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: var(--s-4) var(--s-5);
+      background: var(--bg);
+      transition: border-color var(--t-mid) var(--ease-out),
+                  opacity var(--t-mid) var(--ease-out);
     }
-    .cell.running { border-color: #f39c12; background: #fff8e7; }
-    .cell.ok      { border-color: #27ae60; }
-    .cell.error   { border-color: #c0392b; background: #fdecea; }
-    .cell.stale   { border-color: #95a5a6; opacity: 0.65; }
+    .cell + .cell { margin-top: var(--s-3); }
+    .cell.running { border-color: var(--run); }
+    .cell.ok { border-color: color-mix(in srgb, var(--ok) 35%, var(--line)); }
+    .cell.error { border-color: color-mix(in srgb, var(--err) 35%, var(--line)); }
+    .cell.stale { opacity: 0.55; }
+
     .cell-head {
-      display: flex;
-      justify-content: space-between;
-      font-family: ui-monospace, monospace;
-      font-size: 13px;
-      color: #555;
-      margin-bottom: 0.4rem;
+      display: flex; justify-content: space-between; align-items: baseline;
+      font-family: var(--font-mono); font-size: var(--t-xs);
+      color: var(--ink-3); margin-bottom: var(--s-2);
+      letter-spacing: 0.02em;
     }
-    .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; font-weight: 600; }
-    .badge.pending { background: #ecf0f1; color: #555; }
-    .badge.running { background: #f39c12; color: white; }
-    .badge.ok      { background: #27ae60; color: white; }
-    .badge.error   { background: #c0392b; color: white; }
-    .badge.stale   { background: #95a5a6; color: white; }
-    .source { font-family: ui-monospace, monospace; font-size: 13px; background: #f5f5f5; padding: 0.4rem 0.6rem; border-radius: 3px; white-space: pre-wrap; }
-    .out { margin-top: 0.5rem; font-family: ui-monospace, monospace; font-size: 13px; }
-    .deps { color: #888; font-size: 11px; margin-top: 0.4rem; }
+    .cell-head .id { color: var(--ink); font-weight: 500; }
+    .cell-head .lang { text-transform: uppercase; font-size: 11px; }
+    .cell-head .timing { color: var(--ink-4); font-feature-settings: "tnum"; }
+
+    .cell-source {
+      font-family: var(--font-mono); font-size: var(--t-sm);
+      background: var(--bg-soft); padding: var(--s-2) var(--s-3);
+      border-radius: 3px; color: var(--ink-2); margin: var(--s-2) 0;
+      white-space: pre-wrap;
+    }
+    .cell-out {
+      font-family: var(--font-mono); font-size: var(--t-sm);
+      color: var(--ink); margin-top: var(--s-2);
+    }
+    .cell.error .cell-out { color: var(--err); }
+    .cell-deps {
+      font-family: var(--font-mono); font-size: var(--t-xs);
+      color: var(--ink-4); margin-top: var(--s-3);
+      letter-spacing: 0.02em;
+    }
   </style>
 </head>
 <body>
-  <h1>workbook-runtime: reactive cells</h1>
-  <p class="meta">
-    P3.4 (static analyzer) + P3.7 (reactive executor). Three Rhai cells
-    form a tiny DAG: <code>doubled</code> and <code>incremented</code>
-    both read <code>n</code>. Drag the slider — only the cells that
-    actually depend on <code>n</code> re-execute, debounced 200ms.
-  </p>
+  <main class="wb-page">
+    <header class="wb-hero">
+      <div class="eyebrow">P3.4 + P3.7 · reactivity</div>
+      <h1>The cell graph re-executes itself.</h1>
+      <p>
+        Three Rhai cells form a tiny DAG: <code>doubled</code> and
+        <code>incremented</code> both read <code>n</code>;
+        <code>summary</code> sums them. Drag <code>n</code> — only
+        downstream cells re-run, debounced 200 ms. The static analyzer
+        builds the graph; the executor walks it in topological order.
+      </p>
+    </header>
 
-  <div class="input-row">
-    <label for="n">n =</label>
-    <input id="n" type="number" value="40" min="0" max="1000" step="1" />
-    <span class="meta">setInput("n", value) on every change</span>
-  </div>
+    <section class="wb-section">
+      <div class="wb-controls">
+        <span class="wb-field">
+          <label>n</label>
+          <input id="n" class="wb-input num" type="number" value="40" min="0" max="1000" step="1" />
+        </span>
+        <span class="wb-muted wb-mono" style="font-size: var(--t-sm);">
+          → <span class="wb-kbd">setInput("n", value)</span>
+        </span>
+      </div>
+    </section>
 
-  <div id="cells"></div>
+    <section class="wb-section">
+      <h2 class="wb-section-title">Cells</h2>
+      <div id="cells"></div>
+    </section>
 
-  <h3 style="margin-top: 2rem;">Build info</h3>
-  <pre id="info" style="background: #f5f5f5; padding: 1rem; border-radius: 4px;">loading…</pre>
+    <section class="wb-section">
+      <h2 class="wb-section-title">Build info</h2>
+      <div id="info"></div>
+    </section>
+  </main>
 
   <script type="module">
     import init, * as wasm from "../../pkg/workbook_runtime.js";
     import { createRuntimeClient, analyzeCell, ReactiveExecutor } from "./runtime.bundle.js";
+    import { mountChrome, renderBuildInfo, setWorkbookExport } from "../_shared/chrome.js";
+
+    mountChrome({ slug: "reactive-cells" });
 
     const t0 = performance.now();
     await init();
-    const t1 = performance.now();
-    const coldStartMs = Math.round(t1 - t0);
-    document.getElementById("info").textContent = JSON.stringify(
-      { ...wasm.build_info(), cold_start_ms: coldStartMs },
-      null, 2,
-    );
+    const coldStartMs = Math.round(performance.now() - t0);
+    renderBuildInfo("info", wasm.build_info(), coldStartMs);
 
-    // Build a runtime client around the loaded wasm. The wasmBridge.ts
-    // expects a loader that returns the wasm module — we pass a function
-    // that returns the already-loaded one.
-    const client = createRuntimeClient({
-      loadWasm: async () => wasm,
-    });
+    const client = createRuntimeClient({ loadWasm: async () => wasm });
 
     const cells = [
-      { id: "doubled",     language: "rhai", source: "n * 2", provides: ["doubled"], dependsOn: ["n"] },
-      { id: "incremented", language: "rhai", source: "n + 1", provides: ["incremented"], dependsOn: ["n"] },
-      { id: "summary",     language: "rhai", source: "doubled + incremented", provides: ["summary"], dependsOn: ["doubled", "incremented"] },
+      { id: "doubled",     language: "rhai", source: "n * 2",                    provides: ["doubled"],     dependsOn: ["n"] },
+      { id: "incremented", language: "rhai", source: "n + 1",                    provides: ["incremented"], dependsOn: ["n"] },
+      { id: "summary",     language: "rhai", source: "doubled + incremented",    provides: ["summary"],     dependsOn: ["doubled", "incremented"] },
     ];
 
-    // Render scaffolding for each cell upfront.
     const cellsRoot = document.getElementById("cells");
     const cellEls = new Map();
     for (const cell of cells) {
       const a = analyzeCell(cell);
       const el = document.createElement("div");
-      el.className = "cell pending";
+      el.className = "cell stale";
       el.innerHTML = `
         <div class="cell-head">
-          <span><strong>${cell.id}</strong> · ${cell.language}</span>
-          <span class="badge pending">pending</span>
+          <span><span class="wb-dot idle"></span><span class="id">${cell.id}</span></span>
+          <span class="lang">${cell.language}</span>
         </div>
-        <div class="source">${cell.source}</div>
-        <div class="out">(not yet run)</div>
-        <div class="deps">reads = [${a.reads.join(", ")}], provides = [${a.provides.join(", ")}]</div>
+        <div class="cell-source">${cell.source}</div>
+        <div class="cell-out wb-muted">—</div>
+        <div class="cell-deps">reads = [${a.reads.join(", ")}] · provides = [${a.provides.join(", ")}]</div>
       `;
       cellsRoot.appendChild(el);
       cellEls.set(cell.id, el);
@@ -123,22 +133,28 @@
         const el = cellEls.get(state.cellId);
         if (!el) return;
         el.className = `cell ${state.status}`;
-        const badge = el.querySelector(".badge");
-        badge.className = `badge ${state.status}`;
-        badge.textContent = state.status + (state.lastRunMs != null ? ` · ${state.lastRunMs.toFixed(1)}ms` : "");
-        const out = el.querySelector(".out");
+        const dotEl = el.querySelector(".wb-dot");
+        dotEl.className = `wb-dot ${state.status}`;
+        const head = el.querySelector(".cell-head");
+        // Refresh the right-side meta with timing badge.
+        let timing = el.querySelector(".timing");
+        if (!timing) {
+          timing = document.createElement("span");
+          timing.className = "timing";
+          head.querySelector(".lang").after(document.createTextNode(" · "));
+          head.querySelector(".lang").parentElement.insertBefore(timing, head.lastElementChild);
+        }
+        const out = el.querySelector(".cell-out");
         if (state.status === "ok" && state.outputs?.length) {
-          out.textContent = state.outputs
-            .map((o) => o.kind === "text" ? o.content : JSON.stringify(o))
-            .join("\n");
+          out.classList.remove("wb-muted");
+          out.textContent = state.outputs.map((o) => o.kind === "text" ? o.content : JSON.stringify(o)).join("\n");
         } else if (state.status === "error") {
-          out.textContent = "ERROR: " + (state.error ?? "(unknown)");
-          out.style.color = "#c0392b";
-        } else if (state.status === "stale") {
-          // leave previous output visible, just dim via CSS
+          out.textContent = state.error ?? "(error)";
         } else if (state.status === "running") {
+          out.classList.add("wb-muted");
           out.textContent = "running…";
         }
+        // (We leave previous output visible during stale.)
       },
     });
 
@@ -147,6 +163,18 @@
     document.getElementById("n").addEventListener("input", (e) => {
       executor.setInput("n", Number(e.target.value));
     });
+
+    // Expose this demo's current workbook to the nav-bar download button.
+    setWorkbookExport(() => ({
+      manifest: {
+        name: "reactive cells",
+        slug: "reactive-cells",
+        version: "0.1",
+        runtime_features: ["rhai"],
+      },
+      inputs: { n: Number(document.getElementById("n").value) },
+      cells,
+    }));
   </script>
 </body>
 </html>

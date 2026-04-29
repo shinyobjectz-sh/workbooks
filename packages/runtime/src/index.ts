@@ -96,6 +96,55 @@ export type {
 // download for workbooks that only use Polars/Rhai/charts.
 export { runDuckdbSql } from "./duckdbSidecar";
 
+// LLM service client (T-LLM.1) — typed contract matching
+// proto/workbook/llm/v1/llm.proto. Tier 1 browser transport ships now;
+// Tier 2 (CF Gateway) and Tier 3 (Connect-RPC) plug in later without
+// changing caller code.
+export { createBrowserLlmClient } from "./llmClient";
+export type {
+  LlmClient,
+  BrowserLlmClientOptions,
+  ChatMessage,
+  ContentPart,
+  ToolDefinition,
+  ToolCall,
+  GenerateChatRequest,
+  GenerateChatEvent,
+  EmbedRequest,
+  EmbedResponse,
+  DescribeResponse,
+  ModelInfo,
+  Role,
+  StopReason,
+  TokenUsage,
+} from "./llmClient";
+
+// Agent loop (T-LLM.2) — minimal tool-using agent on top of LlmClient.
+// Wraps generateChat with a tool-dispatch loop; pi-agent-core wraps this
+// later for full multi-turn / planning semantics.
+export { runAgentLoop } from "./agentLoop";
+export type {
+  AgentTool,
+  AgentLoopOptions,
+  AgentLoopResult,
+} from "./agentLoop";
+
+// HTML-first workbook bindings (T-HTML.1) — custom elements + parser
+// + mounter. The DOM IS the workbook; no JSON marshaling needed.
+//   <wb-workbook> <wb-input> <wb-cell> <wb-output> <wb-agent> <wb-chat>
+// Plus registerWorkbookCell for plugin authors who ship new cell types.
+export {
+  parseWorkbookHtml,
+  mountHtmlWorkbook,
+  registerWorkbookCell,
+  getRegisteredCell,
+} from "./htmlBindings";
+export type {
+  WorkbookContext,
+  CustomCellExecutor,
+  MountOptions,
+} from "./htmlBindings";
+
 // Model artifact resolver (P4.2) — content-addressed IndexedDB cache for
 // ML model weights. Cache-first fetch, SHA-256 integrity verification.
 export {

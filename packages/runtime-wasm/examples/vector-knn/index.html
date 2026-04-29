@@ -2,73 +2,63 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>workbook-runtime: vector KNN (T1.2)</title>
-  <style>
-    :root { color-scheme: light; }
-    * { box-sizing: border-box; }
-    body {
-      font-family: ui-sans-serif, system-ui, sans-serif;
-      max-width: 920px;
-      margin: 2rem auto;
-      padding: 0 1rem;
-      line-height: 1.5;
-    }
-    .meta { color: #666; font-size: 0.875rem; }
-    .controls {
-      display: grid; grid-template-columns: auto auto auto auto auto auto;
-      gap: 0.75rem; align-items: center; margin: 1rem 0;
-    }
-    label { font-weight: 600; font-size: 13px; }
-    input[type="number"] { padding: 0.4rem; width: 6rem; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; }
-    button { padding: 0.5rem 1rem; cursor: pointer; font-size: 14px; background: #111; color: white; border: 0; border-radius: 4px; }
-    button:disabled { opacity: 0.5; cursor: wait; }
-    .panel { border: 1px solid #ddd; border-radius: 6px; padding: 0.75rem 1rem; margin: 0.75rem 0; }
-    .stat { display: flex; gap: 1.5rem; font-family: ui-monospace, monospace; font-size: 13px; }
-    .stat span { color: #555; }
-    .stat strong { color: #111; }
-    table { border-collapse: collapse; width: 100%; font-size: 13px; margin-top: 0.5rem; }
-    th, td { border: 1px solid #ddd; padding: 0.4rem 0.6rem; text-align: left; }
-    th { background: #f5f5f5; font-weight: 600; }
-    td.dist { font-family: ui-monospace, monospace; text-align: right; }
-    pre.info { background: #f5f5f5; padding: 1rem; border-radius: 4px; }
-  </style>
+  <title>workbook/runtime — vector knn</title>
+  <link rel="stylesheet" href="../_shared/design.css" />
 </head>
 <body>
-  <h1>workbook-runtime: vector KNN</h1>
-  <p class="meta">
-    HNSW nearest-neighbor search via <code>instant-distance</code>. Builds
-    an index over N random unit vectors of dimension D, then queries the
-    k closest by cosine distance. Pair this with embeddings (T1.3) to
-    get semantic search end-to-end in the browser.
-  </p>
+  <main class="wb-page">
+    <header class="wb-hero">
+      <div class="eyebrow">T1.2 · vectors</div>
+      <h1>HNSW nearest-neighbor search.</h1>
+      <p>
+        <code>instant-distance</code> builds a hierarchical small-world graph
+        over a corpus of unit vectors, then queries by cosine in
+        sub-millisecond time. Pair with embeddings for full semantic search.
+      </p>
+    </header>
 
-  <div class="controls">
-    <label for="n">N (corpus)</label>
-    <input id="n" type="number" value="2000" min="100" max="100000" step="100" />
-    <label for="d">D (dim)</label>
-    <input id="d" type="number" value="128" min="8" max="2048" step="8" />
-    <label for="k">k</label>
-    <input id="k" type="number" value="5" min="1" max="50" step="1" />
-    <label for="ef">ef_construction</label>
-    <input id="ef" type="number" value="40" min="10" max="200" step="10" title="Build-quality knob. Default 100; lowering trades recall for speed. WASM is single-threaded so the build cost scales linearly with this." />
-    <button id="run">Build + query</button>
-  </div>
+    <section class="wb-section">
+      <div class="wb-controls">
+        <span class="wb-field"><label>n</label>
+          <input id="n" class="wb-input num" type="number" value="2000" min="100" max="100000" step="100" />
+        </span>
+        <span class="wb-field"><label>dim</label>
+          <input id="d" class="wb-input num" type="number" value="128" min="8" max="2048" step="8" />
+        </span>
+        <span class="wb-field"><label>k</label>
+          <input id="k" class="wb-input num" type="number" value="5" min="1" max="50" step="1" />
+        </span>
+        <span class="wb-field"><label>ef</label>
+          <input id="ef" class="wb-input num" type="number" value="40" min="10" max="200" step="10"
+            title="ef_construction — build-quality knob. Lower = faster build, lower recall." />
+        </span>
+        <button id="run" class="wb-btn run">Build + query</button>
+      </div>
+    </section>
 
-  <div id="results"></div>
+    <section class="wb-section">
+      <div id="results"></div>
+    </section>
 
-  <h3 style="margin-top: 2rem;">Build info</h3>
-  <pre class="info" id="info">loading…</pre>
+    <section class="wb-section">
+      <h2 class="wb-section-title">Build info</h2>
+      <div id="info"></div>
+    </section>
+  </main>
 
   <script type="module">
-    import init, { buildVectorIndexFlat, queryVectorIndexFlat, dropVectorIndex, build_info } from "../../pkg/workbook_runtime.js";
+    import init, {
+      buildVectorIndexFlat, queryVectorIndexFlat, dropVectorIndex,
+      build_info,
+    } from "../../pkg/workbook_runtime.js";
+    import { mountChrome, renderBuildInfo } from "../_shared/chrome.js";
+
+    mountChrome({ slug: "vector-knn" });
 
     const t0 = performance.now();
     await init();
-    const t1 = performance.now();
-    document.getElementById("info").textContent = JSON.stringify(
-      { ...build_info(), cold_start_ms: Math.round(t1 - t0) },
-      null, 2,
-    );
+    const coldStartMs = Math.round(performance.now() - t0);
+    renderBuildInfo("info", build_info(), coldStartMs);
 
     const button = document.getElementById("run");
     const results = document.getElementById("results");
@@ -80,13 +70,9 @@
       const K = Number(document.getElementById("k").value);
       const EF = Number(document.getElementById("ef").value);
       button.disabled = true;
-      results.innerHTML = "<p class='meta'>generating corpus…</p>";
+      results.innerHTML = `<div class="wb-out empty">generating ${N.toLocaleString()} × ${D}-dim corpus…</div>`;
 
       try {
-        // Generate ids + a flat Float32Array — typed arrays cross the
-        // wasm boundary as a single bulk copy instead of walking an
-        // array of objects each with a nested array. ~10× faster on
-        // big corpora.
         const ids = new Array(N);
         const flat = new Float32Array(N * D);
         for (let i = 0; i < N; i++) {
@@ -96,7 +82,7 @@
           }
         }
 
-        results.innerHTML = "<p class='meta'>building index…</p>";
+        results.innerHTML = `<div class="wb-out empty">building HNSW…</div>`;
 
         if (currentHandle !== null) {
           dropVectorIndex(currentHandle);
@@ -110,52 +96,60 @@
         for (let j = 0; j < D; j++) randomQuery[j] = Math.random() * 2 - 1;
         const randomResult = queryVectorIndexFlat(currentHandle, randomQuery, K);
 
-        // Use one of the corpus vectors verbatim — should be at distance ≈ 0.
         const midIdx = Math.floor(N / 2);
         const knownQuery = flat.slice(midIdx * D, (midIdx + 1) * D);
         const knownResult = queryVectorIndexFlat(currentHandle, knownQuery, K);
 
         renderResults(buildResult, randomResult, knownResult, N, D, K);
       } catch (e) {
-        results.innerHTML = `<pre style="color:#c0392b">${String(e)}</pre>`;
+        results.innerHTML = `<div class="wb-out error">${String(e)}</div>`;
       } finally {
         button.disabled = false;
       }
     });
 
     function renderResults(build, randomQ, knownQ, N, D, K) {
-      results.innerHTML = "";
-
-      const buildPanel = document.createElement("div");
-      buildPanel.className = "panel";
-      buildPanel.innerHTML = `
-        <div class="stat">
-          <span>build</span>
-          <strong>${build.build_ms.toFixed(1)} ms</strong>
-          <span>(${N.toLocaleString()} × ${D}-dim cosine)</span>
+      const buildCard = `
+        <div class="wb-card compact">
+          <div class="wb-card-header">
+            <span class="wb-card-title">index</span>
+            <span class="wb-card-meta">
+              <span><strong>${N.toLocaleString()}</strong> × ${D}-dim</span>
+              <span>cosine</span>
+            </span>
+          </div>
+          <div class="wb-tag-row">
+            <span class="wb-tag"><span>build</span><strong>${build.build_ms.toFixed(0)} ms</strong></span>
+          </div>
         </div>
       `;
-      results.appendChild(buildPanel);
-
-      results.appendChild(renderQueryPanel("Random query", randomQ, K));
-      results.appendChild(renderQueryPanel("Known-corpus query (item near middle)", knownQ, K));
+      results.innerHTML = buildCard +
+        renderQueryCard("query · random", randomQ, K) +
+        renderQueryCard("query · known corpus item (item-" + Math.floor(N/2) + ")", knownQ, K);
     }
 
-    function renderQueryPanel(title, q, k) {
-      const panel = document.createElement("div");
-      panel.className = "panel";
+    function renderQueryCard(title, q, k) {
       const rows = q.neighbors
-        .map((n, i) => `<tr><td>${i + 1}</td><td>${n.id}</td><td class="dist">${n.distance.toFixed(6)}</td></tr>`)
+        .map((n, i) => `
+          <tr>
+            <td class="wb-mono wb-muted" style="width:2rem;">${i + 1}</td>
+            <td class="wb-mono">${n.id}</td>
+            <td class="dist">${n.distance.toFixed(6)}</td>
+          </tr>
+        `)
         .join("");
-      panel.innerHTML = `
-        <h3 style="margin: 0 0 0.4rem; font-size:14px;">${title}</h3>
-        <div class="stat"><span>query</span> <strong>${q.query_ms.toFixed(2)} ms</strong> <span>(top ${k})</span></div>
-        <table>
-          <thead><tr><th>#</th><th>id</th><th class="dist">cosine distance</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
+      return `
+        <div class="wb-card">
+          <div class="wb-card-header">
+            <span class="wb-card-title">${title}</span>
+            <span class="wb-tag"><span>query</span><strong>${q.query_ms.toFixed(2)} ms</strong></span>
+          </div>
+          <table class="wb-table">
+            <thead><tr><th>#</th><th>id</th><th class="dist">cosine</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
       `;
-      return panel;
     }
   </script>
 </body>

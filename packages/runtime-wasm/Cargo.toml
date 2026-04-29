@@ -44,6 +44,10 @@ rhai-glue = ["dep:rhai"]
 # ML inference (Hugging Face's Rust ML framework)
 candle = ["dep:candle-core", "dep:candle-nn"]
 
+# Pre-built model architectures (BERT, DistilBERT, etc.) + tokenizer.
+# Enables real model inference on top of the bare candle feature.
+embeddings = ["candle", "dep:candle-transformers", "dep:tokenizers"]
+
 # Classical ML (sklearn equivalent)
 linfa = ["dep:linfa", "dep:linfa-trees", "dep:linfa-clustering", "dep:linfa-linear"]
 
@@ -65,7 +69,7 @@ image-ops = ["dep:image"]
 # Everything — convenience for development
 all = [
   "polars-frames", "charts", "rhai-glue",
-  "candle", "linfa", "burn", "stats", "vectors",
+  "candle", "embeddings", "linfa", "burn", "stats", "vectors",
   "tokenizers", "image-ops",
 ]
 
@@ -97,8 +101,8 @@ plotters = { version = "0.3", optional = true, default-features = false, feature
   "svg_backend", "line_series", "histogram", "area_series",
 ] }
 rhai = { version = "1", optional = true, features = ["sync", "no_optimize"] }
-candle-core = { version = "0.8", optional = true }
-candle-nn = { version = "0.8", optional = true }
+candle-core = { version = "0.10", optional = true }
+candle-nn = { version = "0.10", optional = true }
 linfa = { version = "0.7", optional = true }
 linfa-trees = { version = "0.7", optional = true }
 linfa-clustering = { version = "0.7", optional = true }
@@ -115,6 +119,7 @@ image = { version = "0.25", optional = true, default-features = false, features 
 # direct dep here ensures any transitive uses of 0.3 see the feature.
 getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 ndarray = { version = "0.15", default-features = false }
+candle-transformers = { version = "0.10.2", default-features = false, optional = true }
 
 [profile.release]
 # Optimize for size first, speed second — bundle size is critical for browser load.

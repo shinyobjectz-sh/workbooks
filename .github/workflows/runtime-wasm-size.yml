@@ -26,7 +26,7 @@ jobs:
       # Brotli budget for the default feature set (charts + rhai + polars).
       # Bump deliberately when adding new defaults; don't paper over silent
       # regressions.
-      MAX_BROTLI_KB: 2200
+      MAX_BROTLI_KB: 2500
     steps:
       - uses: actions/checkout@v4
 

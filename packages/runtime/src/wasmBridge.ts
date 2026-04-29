@@ -31,7 +31,8 @@ export type CellLanguage =
   | "duckdb"
   | "candle-inference"
   | "linfa-train"
-  | "wasm-fn";
+  | "wasm-fn"
+  | "chat";
 
 export interface Cell {
   id: string;
@@ -138,6 +139,13 @@ export interface RuntimeClientOptions {
    * For portable export mode, the inlined runtime supplies its own loader.
    */
   loadWasm: WasmLoader;
+  /**
+   * Optional LLM client used to dispatch `chat` cells. When unset, chat
+   * cells fail with an explanatory error. Hosts wire this via
+   * `createBrowserLlmClient(...)` (Tier 1) or one of the Tier 2/3
+   * transports.
+   */
+  llmClient?: import("./llmClient").LlmClient;
 }
 
 /**
@@ -201,6 +209,58 @@ export function createRuntimeClient(opts: RuntimeClientOptions): RuntimeClient {
         const sql = req.cell.source ?? "";
         const csv = (req.params?.csv as string | undefined) ?? "";
         const outputs = await runDuckdbSql(sql, csv);
+        return { outputs };
+      }
+
+      if (lang === "chat") {
+        if (!opts.llmClient) {
+          throw new Error(
+            "chat cells require an llmClient — pass one to createRuntimeClient",
+          );
+        }
+        const params = (req.params ?? {}) as Record<string, unknown>;
+        const userMessage = String(params.message ?? params.user ?? "");
+        const history = Array.isArray(params.history) ? (params.history as unknown[]) : [];
+        const messages: import("./llmClient").ChatMessage[] = [];
+        if (req.cell.source) {
+          messages.push({ role: "system", content: req.cell.source });
+        }
+        for (const m of history) {
+          if (m && typeof m === "object") {
+            messages.push(m as import("./llmClient").ChatMessage);
+          }
+        }
+        if (userMessage) messages.push({ role: "user", content: userMessage });
+
+        const model =
+          (params.model as string | undefined) ??
+          (req.cell.spec as { model?: string } | undefined)?.model ??
+          "openai/gpt-4o-mini";
+
+        const stream = opts.llmClient.generateChat({
+          model,
+          messages,
+          temperature: typeof params.temperature === "number" ? params.temperature : undefined,
+          maxOutputTokens:
+            typeof params.maxOutputTokens === "number" ? params.maxOutputTokens : undefined,
+        });
+
+        const outputs: CellOutput[] = [];
+        for await (const ev of stream) {
+          if (ev.kind === "delta") {
+            outputs.push({ kind: "stream", content: ev.text });
+          } else if (ev.kind === "done") {
+            if (ev.stopReason === "error") {
+              outputs.push({ kind: "error", message: ev.errorMessage ?? "llm error" });
+            } else {
+              outputs.push({
+                kind: "text",
+                content: ev.finalText,
+                mime_type: "text/plain",
+              });
+            }
+          }
+        }
         return { outputs };
       }
 

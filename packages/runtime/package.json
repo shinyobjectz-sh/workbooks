@@ -55,6 +55,18 @@
       "types": "./src/duckdbSidecar.ts",
       "default": "./src/duckdbSidecar.ts"
     },
+    "./llmClient": {
+      "types": "./src/llmClient.ts",
+      "default": "./src/llmClient.ts"
+    },
+    "./agentLoop": {
+      "types": "./src/agentLoop.ts",
+      "default": "./src/agentLoop.ts"
+    },
+    "./htmlBindings": {
+      "types": "./src/htmlBindings.ts",
+      "default": "./src/htmlBindings.ts"
+    },
     "./urlParamBinding": {
       "types": "./src/urlParamBinding.ts",
       "default": "./src/urlParamBinding.ts"
