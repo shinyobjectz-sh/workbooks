@@ -141,6 +141,24 @@ export async function snapshotHistoryBytes() {
   return _bytesPromise;
 }
 
+/** Snapshot bytes + HEAD hash for embedding in a <wb-history>
+ *  element. Returns null when no edits have been recorded. */
+export async function snapshotForEmbed() {
+  if (!_bytesPromise) return null;
+  let wasm;
+  try { wasm = await getWasm(); } catch { return null; }
+  if (!wasm.prollyHead) return null;
+  const bytes = await _bytesPromise;
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) return null;
+  try {
+    const head = wasm.prollyHead(bytes);
+    return { bytes, head };
+  } catch (e) {
+    console.warn("history: snapshotForEmbed head read failed:", e?.message ?? e);
+    return null;
+  }
+}
+
 /** Replace the entire chain with a fresh init. Used by a
  *  "reset history" affordance — currently unwired but kept for
  *  symmetry with clearAll() in persistence. */

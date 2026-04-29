@@ -29,6 +29,7 @@
 import { downloadWorkbookZip } from "@work.books/runtime/packageWorkbook";
 import { composition } from "./composition.svelte.js";
 import { assets } from "./assets.svelte.js";
+import { snapshotForEmbed } from "./historyBackend.svelte.js";
 
 function slug(s) {
   return String(s ?? "")
@@ -96,9 +97,30 @@ function isPortableBuild(html) {
       && html.includes('id="runtime-bundle-src"');
 }
 
-/** Inject the current composition HTML + asset registry into the
- *  source doc as <wb-data> blocks the packager understands. */
-function injectStateInto(doc) {
+/** Compute SHA-256 hex of a byte buffer. Used by the wb-history
+ *  block embedding — both the body sha256 and head-sha256 attributes
+ *  are required by the parser. */
+async function sha256Hex(bytes) {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function bytesToBase64(bytes) {
+  const CHUNK = 0x8000;
+  let s = "";
+  for (let i = 0; i < bytes.byteLength; i += CHUNK) {
+    s += String.fromCharCode(...bytes.subarray(i, Math.min(i + CHUNK, bytes.byteLength)));
+  }
+  return btoa(s);
+}
+
+/** Inject the current composition HTML + asset registry + edit-log
+ *  Prolly chain into the source doc as wb-* blocks the packager
+ *  understands. wb-history is async because reading its bytes goes
+ *  through the runtime wasm prollyHead binding. */
+async function injectStateInto(doc) {
   const body = doc.querySelector("body");
   if (!body) return;
 
@@ -146,6 +168,26 @@ function injectStateInto(doc) {
       catch { el.textContent = payload; }
     }
   }
+
+  // Edit log — Prolly Tree commit chain. Embed only when the chain
+  // has bootstrapped (some edits have been recorded). A workbook
+  // exported before any edits skips the wb-history block entirely;
+  // the parser's head-sha256 requirement makes an empty stub awkward
+  // and "no edits yet" is fine to lose.
+  const snap = await snapshotForEmbed();
+  if (snap) {
+    let histEl = wb.querySelector('wb-history[id="changelog"]');
+    if (!histEl) {
+      histEl = doc.createElement("wb-history");
+      histEl.setAttribute("id", "changelog");
+      histEl.setAttribute("format", "prolly-v1");
+      wb.appendChild(histEl);
+    }
+    histEl.setAttribute("sha256", await sha256Hex(snap.bytes));
+    histEl.setAttribute("head-sha256", snap.head);
+    histEl.setAttribute("encoding", "base64");
+    histEl.textContent = bytesToBase64(snap.bytes);
+  }
 }
 
 async function buildPortableHtml() {
@@ -157,7 +199,7 @@ async function buildPortableHtml() {
     );
   }
   const doc = new DOMParser().parseFromString(source, "text/html");
-  injectStateInto(doc);
+  await injectStateInto(doc);
   return "<!DOCTYPE html>\n" + doc.documentElement.outerHTML;
 }
 
