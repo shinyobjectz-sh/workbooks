@@ -96,6 +96,18 @@ export type {
 // download for workbooks that only use Polars/Rhai/charts.
 export { runDuckdbSql } from "./duckdbSidecar";
 
+// Model artifact resolver (P4.2) — content-addressed IndexedDB cache for
+// ML model weights. Cache-first fetch, SHA-256 integrity verification.
+export {
+  createModelArtifactResolver,
+  sha256Hex,
+} from "./modelArtifactResolver";
+export type {
+  ArtifactRef,
+  ResolvedArtifact,
+  ModelArtifactResolver,
+} from "./modelArtifactResolver";
+
 // URL parameter binding (P3.6) — input names ↔ ?name=value query params.
 // Sharing a URL = sharing a parameterized workbook snapshot.
 export {

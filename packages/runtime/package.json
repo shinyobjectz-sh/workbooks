@@ -59,6 +59,10 @@
       "types": "./src/urlParamBinding.ts",
       "default": "./src/urlParamBinding.ts"
     },
+    "./modelArtifactResolver": {
+      "types": "./src/modelArtifactResolver.ts",
+      "default": "./src/modelArtifactResolver.ts"
+    },
     "./blocks/*": {
       "svelte": "./src/blocks/*"
     },
