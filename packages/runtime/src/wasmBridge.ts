@@ -95,6 +95,13 @@ export interface RunCellRequest {
   runtimeId: string;
   cell: Cell;
   params?: Record<string, unknown>;
+  /**
+   * Memory tables available to this cell. Keyed by memory id; value
+   * is the current Arrow IPC stream bytes for that table. Polars-SQL
+   * cells get these registered as table sources matching the id.
+   * Cells with no `reads=` references to memory ids see an empty map.
+   */
+  memoryTables?: Record<string, Uint8Array>;
 }
 
 export interface RunCellResponse {
@@ -125,6 +132,14 @@ export interface WorkbookRuntimeWasm {
   initRuntime: (req: { workbook_slug: string; environment: Environment }) => InitRuntimeResponse;
   runRhai?: (source: string, params?: unknown) => CellOutput[];
   runPolarsSql?: (sql: string, csv: string) => CellOutput[];
+  /**
+   * Run Polars-SQL with one or more registered Arrow IPC tables.
+   * `tables` is a JSON object mapping table name → Uint8Array of
+   * Arrow IPC stream bytes. Cells reference tables by name in their
+   * SQL source. Lands once the Rust crate's IPC feature is wired
+   * through wasm-bindgen.
+   */
+  runPolarsSqlIpc?: (sql: string, tables: Record<string, Uint8Array>) => CellOutput[];
   runChart?: (spec_json: string) => CellOutput[];
   candleSmokeTest?: () => CellOutput[];
   linfaSmokeTest?: () => CellOutput[];
@@ -233,12 +248,35 @@ export function createRuntimeClient(opts: RuntimeClientOptions): RuntimeClient {
       if (lang === "polars") {
         if (!wasm.runPolarsSql) throw new Error("runtime built without polars-frames feature");
         const sql = req.cell.source ?? "";
-        // Pick CSV from params in this priority order:
+
+        // Memory tables (Arrow IPC) take precedence over CSV params
+        // when the cell's `reads=` references a registered memory id.
+        // Each referenced memory becomes a table available to the SQL
+        // by its id name.
+        const memoryTables: Record<string, Uint8Array> = {};
+        if (req.memoryTables && req.cell.dependsOn) {
+          for (const dep of req.cell.dependsOn) {
+            const t = req.memoryTables[dep];
+            if (t instanceof Uint8Array) memoryTables[dep] = t;
+          }
+        }
+
+        if (Object.keys(memoryTables).length > 0) {
+          if (!wasm.runPolarsSqlIpc) {
+            throw new Error(
+              "polars cell references a <wb-memory> table but the runtime " +
+                "build does not expose runPolarsSqlIpc — rebuild runtime-wasm " +
+                "with the `ipc` polars feature and the wasm-bindgen export wired",
+            );
+          }
+          const outputs = wasm.runPolarsSqlIpc(sql, memoryTables);
+          return { outputs };
+        }
+
+        // CSV fallback (the existing path):
         //   1. Explicit `params.csv` (legacy: `<wb-input name="csv">`).
         //   2. The first `reads=` ref whose param is a string —
         //      i.e. a `<wb-data mime="text/csv">` referenced by id.
-        // This lets authors write `reads="orders"` instead of plumbing
-        // the reserved `csv` name everywhere.
         let csv = (req.params?.csv as string | undefined) ?? "";
         if (!csv && req.params && req.cell.dependsOn) {
           for (const dep of req.cell.dependsOn) {

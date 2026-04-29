@@ -588,7 +588,14 @@ export async function mountHtmlWorkbook(opts: MountOptions): Promise<{
     llmClient: opts.llmClient,
   });
 
-  // Wrap so custom cell types take precedence over wasm dispatch.
+  // Track memory block ids registered at mount so the cell-dispatch
+  // wrapper can inject the right tables into RunCellRequest based on
+  // the cell's `reads=` references.
+  const registeredMemoryIds = new Set<string>(spec.memory.map((m) => m.id));
+
+  // Wrap so custom cell types take precedence over wasm dispatch and
+  // memory tables flow through to Polars-SQL cells without the
+  // executor needing memory awareness.
   const client: RuntimeClient = {
     ...wasmClient,
     async runCell(req) {
@@ -602,7 +609,20 @@ export async function mountHtmlWorkbook(opts: MountOptions): Promise<{
         });
         return { outputs };
       }
-      return wasmClient.runCell(req);
+
+      // Inject memory tables for any dependsOn id that resolves to a
+      // registered <wb-memory> block. Cells of any language receive
+      // them; only Polars-SQL routes through them today.
+      const memoryTables: Record<string, Uint8Array> = {};
+      for (const dep of req.cell.dependsOn ?? []) {
+        if (registeredMemoryIds.has(dep) && wasmClient.exportMemory) {
+          memoryTables[dep] = await wasmClient.exportMemory(dep);
+        }
+      }
+      const enriched: typeof req = Object.keys(memoryTables).length > 0
+        ? { ...req, memoryTables }
+        : req;
+      return wasmClient.runCell(enriched);
     },
   };
 
