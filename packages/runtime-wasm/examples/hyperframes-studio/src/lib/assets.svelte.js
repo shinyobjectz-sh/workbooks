@@ -18,7 +18,10 @@
 // mutation marks the registry dirty; the coordinator debounces and
 // writes the whole {items} blob under PERSIST_ID. Reload rehydrates
 // from the same store. The Package zip captures the live registry,
-// so cross-machine portability still goes through that path.
+// so cross-machine portability still goes through that path. Asset
+// add/remove also records a Prolly Tree commit for audit.
+
+import { recordEdit, recordDelete } from "./historyBackend.svelte.js";
 
 const MAX_BYTES = 50 * 1024 * 1024; // 50 MB hard cap per asset
 const PERSIST_ID = "assets";
@@ -102,6 +105,18 @@ class AssetsStore {
     };
     this.items = [...this.items, item];
     this._persist();
+    // Record the add as a Prolly commit. We omit dataUrl from the
+    // recorded blob — the audit chain just needs to know an asset
+    // existed; the actual bytes live in the assets registry blob.
+    const auditEntry = {
+      id: item.id,
+      name: item.name,
+      kind: item.kind,
+      mime: item.type,
+      size: item.size,
+      duration: item.duration,
+    };
+    recordEdit(`asset:${item.id}`, auditEntry, `add asset ${item.name}`);
     return item;
   }
 
@@ -118,6 +133,7 @@ class AssetsStore {
   remove(id) {
     this.items = this.items.filter((a) => a.id !== id);
     this._persist();
+    recordDelete(`asset:${id}`, `remove asset ${id}`);
   }
 
   /** Replace the entire registry with the supplied items in one

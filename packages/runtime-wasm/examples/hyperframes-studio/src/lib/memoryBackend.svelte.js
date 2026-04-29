@@ -25,6 +25,7 @@
 
 import { loadState, markDirty } from "./persistence.svelte.js";
 import { loadRuntime } from "virtual:workbook-runtime";
+import { recordEdit } from "./historyBackend.svelte.js";
 
 const MEM_KEY = "agentThread.arrow";
 const SCHEMA = {
@@ -84,6 +85,11 @@ export async function appendTurn({ role, segments }) {
   // closure so we can return synchronously even if the save fires
   // later.
   markDirty(MEM_KEY, () => combined);
+
+  // Record the turn in the audit chain too. Fire-and-forget; the
+  // history layer catches its own errors.
+  const segCount = Array.isArray(segments) ? segments.length : 0;
+  recordEdit(`turn:${row.turn_id}`, row, `${row.role} turn (${segCount} seg${segCount === 1 ? "" : "s"})`);
 }
 
 /** Replace the entire stored thread with a fresh stream. Used by

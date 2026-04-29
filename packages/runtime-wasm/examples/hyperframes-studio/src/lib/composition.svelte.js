@@ -6,6 +6,7 @@
 import { INITIAL_COMPOSITION, IFRAME_RUNTIME, IFRAME_RUNTIME_AUTOPLAY } from "./initial.js";
 import { assets } from "./assets.svelte.js";
 import { bootstrapLoro, readComposition, writeComposition } from "./loroBackend.svelte.js";
+import { recordEdit } from "./historyBackend.svelte.js";
 
 function escapeRe(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -180,9 +181,13 @@ class CompositionStore {
       });
   }
 
-  /** Apply the current html as a Loro op + schedule snapshot save. */
+  /** Apply the current html as a Loro op + schedule snapshot save +
+   *  record an audit-chain commit so the history primitive captures
+   *  this edit. The commit is fire-and-forget; recordEdit catches its
+   *  own errors so a history failure doesn't break the editor. */
   _persist() {
     writeComposition(this.html);
+    recordEdit("composition", this.html, `composition save (${this.html.length} chars)`);
   }
 
   clips = $derived(parseClips(this.html));
