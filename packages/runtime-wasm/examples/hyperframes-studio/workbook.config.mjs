@@ -3,6 +3,8 @@
 // renders it; a parsed timeline shows clips with their data-start /
 // data-duration. Same SPA workbook shape as svelte-app & tailwind-app.
 import tailwindcss from "@tailwindcss/vite";
+import wasm from "vite-plugin-wasm";
+import topLevelAwait from "vite-plugin-top-level-await";
 
 export default {
   name: "hyperframes-studio · workbook",
@@ -11,7 +13,11 @@ export default {
   version: "0.1",
   entry: "src/index.html",
   vite: {
-    plugins: [tailwindcss()],
+    // wasm + topLevelAwait are needed because loro-crdt ships as an
+    // ESM-integrated WASM module (the proposal Vite doesn't yet
+    // support natively). The plugins handle the compile + init
+    // and degrade the top-level-await loader for older targets.
+    plugins: [tailwindcss(), wasm(), topLevelAwait()],
   },
   env: {
     OPENROUTER_API_KEY: {

@@ -5,9 +5,7 @@
 
 import { INITIAL_COMPOSITION, IFRAME_RUNTIME, IFRAME_RUNTIME_AUTOPLAY } from "./initial.js";
 import { assets } from "./assets.svelte.js";
-import { loadState, markDirty } from "./persistence.svelte.js";
-
-const PERSIST_ID = "composition";
+import { bootstrapLoro, readComposition, writeComposition } from "./loroBackend.svelte.js";
 
 function escapeRe(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -160,24 +158,31 @@ class CompositionStore {
   // Bumped on every set() so the iframe component knows to remount.
   revision = $state(0);
 
-  // Hydration: pulls saved html from IndexedDB if present. Components
-  // bound to .html re-render once the value lands. Set on construction;
-  // resolves asynchronously without blocking module initialization.
+  // Hydration: awaits the Loro backend bootstrap, then pulls the
+  // current "html" value out of the CRDT. Components bound to .html
+  // re-render once the value lands. Resolves asynchronously without
+  // blocking module initialization.
   hydrated = $state(false);
 
   constructor() {
-    loadState(PERSIST_ID).then((saved) => {
-      if (saved && typeof saved.html === "string") {
-        this.html = saved.html;
-        this.revision += 1;
-      }
-      this.hydrated = true;
-    });
+    bootstrapLoro()
+      .then(() => {
+        const stored = readComposition();
+        if (stored && stored.length > 0) {
+          this.html = stored;
+          this.revision += 1;
+        }
+        this.hydrated = true;
+      })
+      .catch((e) => {
+        console.warn("composition: hydrate failed:", e?.message ?? e);
+        this.hydrated = true;
+      });
   }
 
-  /** Tell the persistence coordinator there's a new html to save. */
+  /** Apply the current html as a Loro op + schedule snapshot save. */
   _persist() {
-    markDirty(PERSIST_ID, () => ({ html: this.html }));
+    writeComposition(this.html);
   }
 
   clips = $derived(parseClips(this.html));
