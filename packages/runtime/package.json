@@ -63,6 +63,14 @@
       "types": "./src/modelArtifactResolver.ts",
       "default": "./src/modelArtifactResolver.ts"
     },
+    "./loopBlock": {
+      "types": "./src/loopBlock.ts",
+      "default": "./src/loopBlock.ts"
+    },
+    "./runDiff": {
+      "types": "./src/runDiff.ts",
+      "default": "./src/runDiff.ts"
+    },
     "./blocks/*": {
       "svelte": "./src/blocks/*"
     },

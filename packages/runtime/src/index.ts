@@ -108,6 +108,23 @@ export type {
   ModelArtifactResolver,
 } from "./modelArtifactResolver";
 
+// Loop block (P5.5) — schema + iteration planner. Loop execution
+// dispatch lives in the host's executor (sequential fallback for Tier 1,
+// worker-pool for Tier 3); this file owns the contract.
+export { planLoopIterations, clampParallelism } from "./loopBlock";
+export type {
+  LoopBlockSpec,
+  LoopOverSpec,
+  LoopOverKind,
+  LoopErrorPolicy,
+  LoopIteration,
+} from "./loopBlock";
+
+// Structured diff between scheduled runs (P5.3) — per-cell rollup.
+// Whole-workbook diffs compose by reducing per-cell diffs.
+export { diffCellOutput, diffCsv, diffText } from "./runDiff";
+export type { CellDiff, ChangedRow } from "./runDiff";
+
 // URL parameter binding (P3.6) — input names ↔ ?name=value query params.
 // Sharing a URL = sharing a parameterized workbook snapshot.
 export {
