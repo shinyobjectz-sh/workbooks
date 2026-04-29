@@ -31,6 +31,11 @@
 // readers that still consult it but is no longer written to.
 
 import { loadState, markDirty } from "./persistence.svelte.js";
+// Static import — vite-plugin-singlefile mishandles the dynamic
+// `import("loro-crdt")` form by flattening all chunks into one inline
+// <script> with broken hoist order. Static resolves the dep graph at
+// build time so vite-plugin-wasm can transform consistently.
+import { LoroDoc } from "loro-crdt";
 
 const WORKBOOK_KEY = "workbook.loro";
 const PRIOR_LORO_KEY = "composition.loro";  // earlier shape: composition only
@@ -44,17 +49,7 @@ let _bootPromise = null;
 export function bootstrapLoro() {
   if (_bootPromise) return _bootPromise;
   _bootPromise = (async () => {
-    let loro;
-    try {
-      loro = await import("loro-crdt");
-    } catch (e) {
-      console.warn("hf loro: peer dep missing, falling back to plain string IDB:", e?.message ?? e);
-      // No-op stub — composition.set() calls below will still
-      // markDirty under the legacy key, so persistence still works.
-      _doc = null;
-      return null;
-    }
-    const doc = new loro.LoroDoc();
+    const doc = new LoroDoc();
 
     // Try the current key first; then the prior composition-only key;
     // then the original plain-string blob. Earliest match wins as

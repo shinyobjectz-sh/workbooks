@@ -4,7 +4,6 @@
 // data-duration. Same SPA workbook shape as svelte-app & tailwind-app.
 import tailwindcss from "@tailwindcss/vite";
 import wasm from "vite-plugin-wasm";
-import topLevelAwait from "vite-plugin-top-level-await";
 
 export default {
   name: "hyperframes-studio · workbook",
@@ -13,11 +12,18 @@ export default {
   version: "0.1",
   entry: "src/index.html",
   vite: {
-    // wasm + topLevelAwait are needed because loro-crdt ships as an
-    // ESM-integrated WASM module (the proposal Vite doesn't yet
-    // support natively). The plugins handle the compile + init
-    // and degrade the top-level-await loader for older targets.
-    plugins: [tailwindcss(), wasm(), topLevelAwait()],
+    // vite-plugin-wasm handles loro-crdt's ESM-integrated WASM init.
+    //
+    // We deliberately do NOT pair with vite-plugin-top-level-await:
+    // vite-plugin-singlefile flattens every module into one inline
+    // <script>, and the TLA plugin's IIFE wrapper produces TDZ
+    // violations when its variables are read before the wrapper has
+    // initialized them. Modern browsers support top-level await
+    // natively at the module level, so target=esnext + native TLA
+    // is the cleaner path. (If we ever need to support older
+    // browsers, we'd need to disable singlefile too.)
+    plugins: [tailwindcss(), wasm()],
+    build: { target: "esnext" },
   },
   env: {
     OPENROUTER_API_KEY: {
