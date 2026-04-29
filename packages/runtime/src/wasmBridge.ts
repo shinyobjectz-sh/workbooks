@@ -191,8 +191,14 @@ export function createRuntimeClient(opts: RuntimeClientOptions): RuntimeClient {
       }
 
       if (lang === "duckdb") {
-        // P3+: lazy-load @duckdb/duckdb-wasm. Same pattern as sqlite.
-        throw new Error("duckdb cell dispatcher not yet wired (P3+)");
+        // P3.1: lazy-load @duckdb/duckdb-wasm sidecar. The DuckDB chunk
+        // (~7 MB) only fetches when a workbook actually runs a duckdb
+        // cell; workbooks using only Polars/Rhai/charts never pay for it.
+        const { runDuckdbSql } = await import("./duckdbSidecar");
+        const sql = req.cell.source ?? "";
+        const csv = (req.params?.csv as string | undefined) ?? "";
+        const outputs = await runDuckdbSql(sql, csv);
+        return { outputs };
       }
 
       throw new Error(`unsupported cell language: ${lang}`);

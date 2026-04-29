@@ -90,3 +90,8 @@ export type {
   CellStatus,
   ExecutorOptions,
 } from "./reactiveExecutor";
+
+// DuckDB sidecar (P3.1) — opt-in. Workbooks that need DuckDB-specific
+// SQL features dynamic-import this module; the ~7 MB chunk doesn't
+// download for workbooks that only use Polars/Rhai/charts.
+export { runDuckdbSql } from "./duckdbSidecar";

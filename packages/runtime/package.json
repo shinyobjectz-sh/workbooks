@@ -67,6 +67,7 @@
   "peerDependencies": {
     "svelte": "^5.0.0",
     "convex-svelte": "*",
+    "@duckdb/duckdb-wasm": "^1.29.0",
     "@deck.gl/aggregation-layers": "^9.0.0",
     "@deck.gl/core": "^9.0.0",
     "@deck.gl/layers": "^9.0.0",
@@ -81,6 +82,7 @@
   },
   "peerDependenciesMeta": {
     "convex-svelte": { "optional": true },
+    "@duckdb/duckdb-wasm": { "optional": true },
     "@deck.gl/aggregation-layers": { "optional": true },
     "@deck.gl/core": { "optional": true },
     "@deck.gl/layers": { "optional": true },
