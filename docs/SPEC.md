@@ -83,9 +83,9 @@ A `.workbook` file is valid HTML containing four structured script layers plus a
   </div>
 </body>
 <script nonce="...">
-  import { mount } from '@signal/workbook-runtime';
-  import Workbook from '@signal/workbook-runtime/Workbook.svelte';
-  import { initWasmRuntime } from '@signal/workbook-runtime-wasm';
+  import { mount } from '@workbook/runtime';
+  import Workbook from '@workbook/runtime/Workbook.svelte';
+  import { initWasmRuntime } from '@workbook/runtime-wasm';
   await initWasmRuntime();
   mount(Workbook, { target: document.getElementById('app') });
 </script>
@@ -97,9 +97,9 @@ A `.workbook` file is valid HTML containing four structured script layers plus a
 
 **Layer 3 — State**: Serialized cell output state from the last run — pre-rendered plots (base64 PNG), text outputs, computed values. The file never looks broken; outputs are always visible because they were embedded at generation time.
 
-**Layer 4 — Svelte UI runtime + components**: The compiled `@signal/workbook-runtime` bundle (~250 KB) containing all block components, the runtime control plane client, and the Svelte mount logic. Loaded from CDN in `linked` mode (cross-workbook caching) or inlined in `portable` mode. The `mount()` call instantiates `Workbook.svelte`, which reads the manifest and renders every block.
+**Layer 4 — Svelte UI runtime + components**: The compiled `@workbook/runtime` bundle (~250 KB) containing all block components, the runtime control plane client, and the Svelte mount logic. Loaded from CDN in `linked` mode (cross-workbook caching) or inlined in `portable` mode. The `mount()` call instantiates `Workbook.svelte`, which reads the manifest and renders every block.
 
-**Layer 5 — Rust/WASM execution runtime**: The compiled `@signal/workbook-runtime-wasm` bundle (~10–15 MB) containing Polars (DataFrames), DataFusion + DuckDB-WASM (SQL), Candle (ML inference), Linfa (classical ML), Burn + WebGPU (training), Plotters / Charming (charts), Rhai (scripting glue), tokenizers, and arrow-rs. Loaded once from CDN, cached aggressively across workbooks. In `portable` mode, the bundle is inlined for true offline portability.
+**Layer 5 — Rust/WASM execution runtime**: The compiled `@workbook/runtime-wasm` bundle (~10–15 MB) containing Polars (DataFrames), DataFusion + DuckDB-WASM (SQL), Candle (ML inference), Linfa (classical ML), Burn + WebGPU (training), Plotters / Charming (charts), Rhai (scripting glue), tokenizers, and arrow-rs. Loaded once from CDN, cached aggressively across workbooks. In `portable` mode, the bundle is inlined for true offline portability.
 
 The body is empty until JS loads (`<div id="app">` with a small skeleton loader). Once the runtime mounts, the document is fully reactive — interactive components are first-class, not progressively-enhanced static HTML.
 
@@ -173,7 +173,7 @@ docker run -p 7700 signal/workbook-runtime
 # → http://localhost:7700
 ```
 
-The runtime image embeds the same `@signal/workbook-runtime-wasm` bundle plus a thin HTTP server, scheduling daemon, and persistence layer. It implements the full WorkbookRuntime contract for headless use cases (CI/CD pipelines, scheduled runs in air-gapped environments, on-prem deployments).
+The runtime image embeds the same `@workbook/runtime-wasm` bundle plus a thin HTTP server, scheduling daemon, and persistence layer. It implements the full WorkbookRuntime contract for headless use cases (CI/CD pipelines, scheduled runs in air-gapped environments, on-prem deployments).
 
 Tier 2 is optional in this architecture — most users never need it because Tier 1 already handles their workflows.
 
@@ -208,7 +208,7 @@ interface WorkbookRuntime {
 
 The Tier 1 implementation (in-browser WASM) and the Tier 3 implementation (Signal hosted) both implement this interface identically. Workbook code makes the same Connect-based RPC calls regardless of which tier is connected.
 
-The contract lives in `@signal/workbook-runtime-spec`.
+The contract lives in `@workbook/runtime-spec`.
 
 ### The runtime selector
 
@@ -370,7 +370,7 @@ OpenAPI is generated automatically alongside the proto. SDK consumers pick which
     "wasmCdnUrl": "https://cdn.signal.app/workbook-runtime-wasm/v1.js",
     "preferredHost": "browser | signal-hosted | self-hosted",
     "contractVersion": "1.0",
-    "bundleVersion": "@signal/workbook-runtime-wasm@1.0"
+    "bundleVersion": "@workbook/runtime-wasm@1.0"
   },
 
   "environment": {
@@ -759,15 +759,15 @@ The component hierarchy is identical across contexts. Differences are confined t
 
 Two complementary bundles cooperate to render and execute a workbook:
 
-**`@signal/workbook-runtime`** (~250 KB gzipped) — the Svelte UI layer:
+**`@workbook/runtime`** (~250 KB gzipped) — the Svelte UI layer:
 - All block components (compiled Svelte)
 - The Svelte 5 runtime
 - The Connect client for the runtime control plane
 - The Arrow Flight client for the data plane (used to stream data between WASM cells)
 - The mount logic and host detection
-- The bridge to `@signal/workbook-runtime-wasm`
+- The bridge to `@workbook/runtime-wasm`
 
-**`@signal/workbook-runtime-wasm`** (~10–15 MB compressed) — the Rust execution layer (Layer 5):
+**`@workbook/runtime-wasm`** (~10–15 MB compressed) — the Rust execution layer (Layer 5):
 - Polars (DataFrames)
 - DuckDB-WASM (SQL)
 - Candle (ML inference)
@@ -836,7 +836,7 @@ Cells always display embedded outputs from the last run. Re-execution at Tier 1 
 
 ### Runtime lifecycle (WASM)
 
-The runtime is the `@signal/workbook-runtime-wasm` bundle described in Layer 5. It's a single WebAssembly module containing Polars, DuckDB-WASM, Candle, Linfa, Burn, Plotters, Rhai, tokenizers, and supporting libraries. Total size: ~10–15 MB compressed; loaded once from CDN per major version, cached aggressively across workbooks.
+The runtime is the `@workbook/runtime-wasm` bundle described in Layer 5. It's a single WebAssembly module containing Polars, DuckDB-WASM, Candle, Linfa, Burn, Plotters, Rhai, tokenizers, and supporting libraries. Total size: ~10–15 MB compressed; loaded once from CDN per major version, cached aggressively across workbooks.
 
 #### Initialization
 
@@ -1118,7 +1118,7 @@ Each pinned dependency records `schemaHash` — a hash of the source workbook's 
 `manifest.environment` is populated at generation time. The Rust/WASM runtime architecture makes reproducibility much simpler than the Python+pip-freeze model:
 
 - **`runtimeFeatures`**: declares which slices of the runtime bundle the workbook uses. Stable; tied to the bundle version.
-- **`bundleVersion`**: pins the exact `@signal/workbook-runtime-wasm` version. Newer bundle major versions are backward-compatible; older bundles continue to load forever from CDN.
+- **`bundleVersion`**: pins the exact `@workbook/runtime-wasm` version. Newer bundle major versions are backward-compatible; older bundles continue to load forever from CDN.
 - **`modelArtifacts`**: each model has a SHA-256 hash. The runtime verifies the hash on load. Models referenced by Hugging Face URL or Signal-hosted URL; both are immutable per-version.
 
 Reproducibility holds because:
@@ -1234,14 +1234,14 @@ The phases below assume the consolidation refactor in `WORKBOOK_REFACTOR.md` has
 
 ### Phase 1 — Svelte-mounted Export & Schema Foundation
 - Export pipeline rewrites: produces a Svelte-mounted HTML shell with embedded layers
-- `@signal/workbook-runtime` package (UI runtime) extracted; published to CDN
+- `@workbook/runtime` package (UI runtime) extracted; published to CDN
 - Bootstrap script + skeleton loader in the exported file body
 - CSP meta tag with nonce per export
 - `workbook.proto` schema authored; Buf registry set up; TypeScript bindings generated
 - Content-disposition: `inline` for view, `attachment` for export
 
 ### Phase 2 — WASM Execution Runtime (foundation)
-- Build minimal `@signal/workbook-runtime-wasm` with Polars + DuckDB-WASM + Plotters
+- Build minimal `@workbook/runtime-wasm` with Polars + DuckDB-WASM + Plotters
 - Single-feature workbooks (data + SQL + charts) running entirely client-side
 - Validate bundle size, cold/warm load times, performance vs Pyodide baseline
 - Connect-based `WorkbookRuntime` service in `runtime.proto`
@@ -1288,7 +1288,7 @@ The phases below assume the consolidation refactor in `WORKBOOK_REFACTOR.md` has
 ### Phase 7 — Runtime Tiers Open
 - Publish `workbook.proto` and `runtime.proto` to public Buf registry
 - Publish runtime bundle (WASM) as a versioned, content-addressable CDN artifact
-- Ship `@signal/workbook-runtime-self-hosted` Docker image for Tier 2 self-hosted (optional, organizations who need on-prem)
+- Ship `@workbook/runtime-self-hosted` Docker image for Tier 2 self-hosted (optional, organizations who need on-prem)
 - Generated SDKs published: `@signal/workbook-sdk` (TS), Python (for legacy interop), Go, Rust
 - `widget` block + widget registry resolution
 - `wasm-fn` block with curated function registry

@@ -3,7 +3,7 @@ import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { resolve } from "path";
 
 /**
- * Build configuration for @signal/workbook-runtime.
+ * Build configuration for @workbook/runtime.
  *
  * Produces a CDN-deployable ESM bundle at dist/workbook-runtime.js plus a
  * library-mode export tree.

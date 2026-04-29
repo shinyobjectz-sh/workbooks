@@ -1,4 +1,4 @@
-//! Cell output types — mirror `signal.workbook.v1.CellOutput` from the proto schema.
+//! Cell output types — mirror `workbook.v1.CellOutput` from the proto schema.
 //!
 //! Cells emit a stream of these as they execute. The bridge serializes them
 //! across the JS boundary as JSON; tier 2/3 hosts serialize as Protobuf.

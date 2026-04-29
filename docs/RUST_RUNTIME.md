@@ -42,7 +42,7 @@ A native Rust runtime is **dramatically better**: ~200ms cold start, ~10 MB bund
 The workbook runtime is a compiled Rust crate that includes the entire data and ML stack:
 
 ```
-@signal/workbook-runtime-wasm  (~10–15 MB compressed)
+@workbook/runtime-wasm  (~10–15 MB compressed)
 ├── Polars              — DataFrame ops (replaces pandas)
 ├── DataFusion           — SQL query engine
 ├── DuckDB-WASM          — alternative SQL engine with extensions
@@ -98,7 +98,7 @@ The agent never writes free-form Rust. It composes structured cells against the 
 
 The `.workbook` format itself stays mostly the same. Differences:
 
-- Layer 4 references `@signal/workbook-runtime-wasm` instead of `@signal/workbook-runtime` (the WASM bundle replaces the Python-host-orchestration JS)
+- Layer 4 references `@workbook/runtime-wasm` instead of `@workbook/runtime` (the WASM bundle replaces the Python-host-orchestration JS)
 - The data layer prefers Arrow IPC over base64 SQLite (Polars-native, zero-copy into the runtime)
 - `manifest.environment` becomes `manifest.runtime.bundle` — declares the runtime version and feature flags rather than pip packages
 - `manifest.runtime.contractVersion` references the Rust runtime's API contract (which Rust crates are expected, what API they expose)
@@ -293,7 +293,7 @@ The proposed approach: **port pi_agent_rust to WASM**, replace its filesystem/sh
 ├── manifest (JSON)              ← document structure
 ├── data (Arrow IPC)             ← embedded data
 ├── outputs (state)              ← last run results
-├── @signal/workbook-runtime-wasm ← cell execution (Polars, Candle, etc.)
+├── @workbook/runtime-wasm ← cell execution (Polars, Candle, etc.)
 └── @signal/workbook-agent-wasm   ← agent (LLM clients + tools + sessions)
     ├── LLM provider clients (Anthropic, OpenAI, etc.) via fetch
     ├── Tool calling protocol
@@ -485,7 +485,7 @@ A new `runtime` shape at the top of the manifest:
 ```json
 "runtime": {
   "kind": "wasm | python",
-  "bundle": "@signal/workbook-runtime-wasm@1.0",
+  "bundle": "@workbook/runtime-wasm@1.0",
   "contractVersion": "1.0",
   "preferredHost": "browser | local | signal-hosted"
 }
@@ -653,7 +653,7 @@ Existing workbooks stay on Python forever. New workbooks are Rust/WASM only. Eve
 ## Implementation Sketch
 
 ### Phase 0 — Prove the runtime (4–6 weeks)
-- Build minimal `@signal/workbook-runtime-wasm` with Polars + DuckDB-WASM + Plotters
+- Build minimal `@workbook/runtime-wasm` with Polars + DuckDB-WASM + Plotters
 - Single demo workbook running entirely in browser
 - Validate bundle size, load time, performance vs Pyodide
 - **Gate**: if this isn't dramatically better than Pyodide, abandon

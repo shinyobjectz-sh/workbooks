@@ -1,0 +1,18 @@
+{
+  "name": "workbooks",
+  "private": true,
+  "description": "Workbooks — document format and runtime for executable, portable analytical artifacts.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zaius-labs/workbooks.git"
+  },
+  "homepage": "https://github.com/zaius-labs/workbooks",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "pnpm -r --filter ./packages/* build",
+    "typecheck": "pnpm -r --filter ./packages/* typecheck"
+  }
+}

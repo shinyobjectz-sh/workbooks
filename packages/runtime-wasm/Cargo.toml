@@ -1,11 +1,13 @@
 [package]
-name = "workbook-runtime-wasm"
+name = "workbook-runtime"
 version = "0.1.0"
 edition = "2021"
-description = "Signal Workbook execution runtime — Rust crates compiled to WASM for client-side execution of SQL, Polars, Rhai, Candle inference, Linfa training, and Plotters charts"
-license = "MIT"
-repository = "https://github.com/shinyobjectz/shinymono"
-authors = ["Signal <hi@signal.ml>"]
+description = "Workbook execution runtime — Rust crates compiled to WASM for client-side execution of SQL, Polars, Rhai, Candle inference, Linfa training, and Plotters charts."
+license = "Apache-2.0"
+repository = "https://github.com/zaius-labs/workbooks"
+homepage = "https://github.com/zaius-labs/workbooks"
+keywords = ["workbook", "wasm", "duckdb", "polars", "notebook"]
+categories = ["wasm", "science"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]

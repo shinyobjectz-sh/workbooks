@@ -1,10 +1,22 @@
 {
-  "name": "@signal/workbook-runtime",
+  "name": "@workbook/runtime",
   "version": "0.1.0",
-  "description": "Signal Workbook UI runtime — Svelte 5 components that render the workbook block tree. Used both by apps/web (live mode) and embedded in exported .workbook files (CDN/inline mode).",
+  "description": "Workbook UI runtime — Svelte 5 components that render the workbook block tree. Used in live applications and embedded in portable .workbook files.",
   "type": "module",
-  "license": "MIT",
-  "repository": "https://github.com/shinyobjectz/shinymono",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zaius-labs/workbooks.git",
+    "directory": "packages/runtime"
+  },
+  "homepage": "https://github.com/zaius-labs/workbooks",
+  "keywords": [
+    "workbook",
+    "svelte",
+    "notebook",
+    "document-format",
+    "block-editor"
+  ],
   "exports": {
     ".": {
       "svelte": "./src/index.ts",
@@ -12,6 +24,16 @@
     },
     "./Workbook.svelte": {
       "svelte": "./src/Workbook.svelte"
+    },
+    "./WorkbookBlock.svelte": {
+      "svelte": "./src/WorkbookBlock.svelte"
+    },
+    "./CitationReport.svelte": {
+      "svelte": "./src/CitationReport.svelte"
+    },
+    "./blockRegistry": {
+      "svelte": "./src/blockRegistry.ts",
+      "types": "./src/blockRegistry.ts"
     },
     "./blocks/*": {
       "svelte": "./src/blocks/*"
@@ -27,12 +49,33 @@
     "dev": "vite build --watch"
   },
   "peerDependencies": {
-    "@shinymono/shared": "*",
     "svelte": "^5.0.0",
-    "convex-svelte": "*"
+    "convex-svelte": "*",
+    "@deck.gl/aggregation-layers": "^9.0.0",
+    "@deck.gl/core": "^9.0.0",
+    "@deck.gl/layers": "^9.0.0",
+    "@observablehq/plot": "^0.6.0",
+    "cytoscape": "^3.0.0",
+    "cytoscape-dagre": "^2.0.0",
+    "echarts": "^5.0.0 || ^6.0.0",
+    "maplibre-gl": "^4.0.0 || ^5.0.0",
+    "mermaid": "^11.0.0",
+    "plotly.js-dist-min": "^2.0.0 || ^3.0.0",
+    "three": "^0.160.0 || ^0.170.0 || ^0.180.0"
   },
   "peerDependenciesMeta": {
-    "convex-svelte": { "optional": true }
+    "convex-svelte": { "optional": true },
+    "@deck.gl/aggregation-layers": { "optional": true },
+    "@deck.gl/core": { "optional": true },
+    "@deck.gl/layers": { "optional": true },
+    "@observablehq/plot": { "optional": true },
+    "cytoscape": { "optional": true },
+    "cytoscape-dagre": { "optional": true },
+    "echarts": { "optional": true },
+    "maplibre-gl": { "optional": true },
+    "mermaid": { "optional": true },
+    "plotly.js-dist-min": { "optional": true },
+    "three": { "optional": true }
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.0",

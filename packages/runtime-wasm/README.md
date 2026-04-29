@@ -1,14 +1,14 @@
-# @signal/workbook-runtime-wasm
+# @workbook/runtime-wasm
 
-Rust execution runtime for Signal Workbooks — compiled to WebAssembly and
+Rust execution runtime for workbooks — compiled to WebAssembly and
 shipped as the workbook's client-side compute layer.
 
 ## What it does
 
 A workbook page loads two bundles:
 
-1. **`@signal/workbook-runtime`** (Svelte UI, ~250 KB) — renders blocks, mounts the document
-2. **`@signal/workbook-runtime-wasm`** (this crate, ~10–15 MB compressed) — executes cells
+1. **`@workbook/runtime`** (Svelte UI, ~250 KB) — renders blocks, mounts the document
+2. **`@workbook/runtime-wasm`** (this crate, ~10–15 MB compressed) — executes cells
 
 The WASM bundle dispatches cell execution by language:
 
@@ -55,7 +55,7 @@ only include the requested features. See `Cargo.toml` for the feature flags.
 
 ## Reference
 
-- `proto/signal/runtime/v1/runtime.proto` — service contract (PR #2)
-- `proto/signal/workbook/v1/workbook.proto` — Workbook + Cell types
+- `proto/workbook/runtime/v1/runtime.proto` — service contract (PR #2)
+- `proto/workbook/v1/workbook.proto` — Workbook + Cell types
 - `docs/WORKBOOK_SPEC.md` — full spec
 - `docs/WORKBOOK_RUST_PIVOT.md` — pivot rationale + tool migration map

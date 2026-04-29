@@ -1,6 +1,6 @@
 //! JS bridge — wasm-bindgen exports for the Svelte UI layer.
 //!
-//! `@signal/workbook-runtime` (the npm package) imports these and wraps them
+//! `@workbook/runtime` (the npm package) imports these and wraps them
 //! in a Connect-shaped client that matches the `WorkbookRuntimeService`
 //! Protobuf definition. Same method names, same wire format — just executed
 //! in-page rather than over HTTP.

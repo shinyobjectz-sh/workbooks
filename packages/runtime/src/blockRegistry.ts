@@ -10,7 +10,7 @@
  * # Usage
  *
  *   // apps/web — pass the full registry with local convex-coupled blocks
- *   import { defaultBlockRegistry } from "@signal/workbook-runtime";
+ *   import { defaultBlockRegistry } from "@workbook/runtime";
  *   import File from "$lib/workbook/blocks/File.svelte";
  *
  *   const registry = {

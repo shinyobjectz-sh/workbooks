@@ -1,5 +1,5 @@
 /**
- * @signal/workbook-runtime — Svelte 5 components that render the workbook
+ * @workbook/runtime — Svelte 5 components that render the workbook
  * block tree.
  *
  * Root component + dispatcher live here. Consumers extend

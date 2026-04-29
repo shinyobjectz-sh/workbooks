@@ -1,11 +1,11 @@
-# @signal/workbook-runtime
+# @workbook/runtime
 
-Svelte 5 UI runtime for Signal Workbooks — the components that render the workbook block tree. Used in two contexts:
+Svelte 5 UI runtime for workbooks — the components that render the workbook block tree. Used in two contexts:
 
-1. **Live mode** (apps/web): imported as a workspace package, mounted inside the Signal app
-2. **Exported mode** (.workbook files): bundled to a CDN-deployable ESM module that the exported HTML imports at `cdn.signal.app/workbook-runtime/v1.js`
+1. **Live mode**: imported as a workspace package, mounted inside a host app
+2. **Exported mode** (.workbook files): bundled to a CDN-deployable ESM module that the exported HTML imports at `<your-cdn>/@workbook/runtime/v1.js`
 
-Both contexts use the **same components** — there is no separate static-render path. See `docs/WORKBOOK_SPEC.md > Rendering & Components`.
+Both contexts use the **same components** — there is no separate static-render path. See [`docs/SPEC.md`](../../docs/SPEC.md) > Rendering & Components.
 
 ## What's in here
 

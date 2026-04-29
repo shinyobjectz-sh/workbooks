@@ -1,5 +1,5 @@
 //! Runtime instance lifecycle — implements the `WorkbookRuntimeService` from
-//! `proto/signal/runtime/v1/runtime.proto` directly in-page.
+//! `proto/workbook/runtime/v1/runtime.proto` directly in-page.
 //!
 //! Tier 1 (browser): the runtime is the WASM module loaded into the page;
 //! method calls are JS function calls.

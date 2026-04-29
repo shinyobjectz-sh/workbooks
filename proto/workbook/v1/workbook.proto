@@ -1,4 +1,4 @@
-// Signal Workbook canonical schema.
+// workbook canonical schema.
 //
 // The single source of truth for every type in the system: manifest, blocks,
 // cell outputs, runtime config. From this schema we generate TypeScript
@@ -11,12 +11,12 @@
 //
 // Reference: docs/WORKBOOK_SPEC.md
 //
-// Versioning: this file uses signal.workbook.v1. Breaking changes increment
+// Versioning: this file uses workbook.v1. Breaking changes increment
 // the major version (v2). Minor backward-compatible field additions stay in v1.
 
 syntax = "proto3";
 
-package signal.workbook.v1;
+package workbook.v1;
 
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
@@ -349,10 +349,10 @@ enum CredentialMode {
   CREDENTIAL_MODE_UNSPECIFIED = 0;
   // Browser-local, never leaves device.
   CREDENTIAL_MODE_USER_KEY = 1;
-  // User key stored in Signal credential vault, calls go through Signal proxy.
-  CREDENTIAL_MODE_SIGNAL_PROXY = 2;
-  // Signal-managed key, metered against user's plan.
-  CREDENTIAL_MODE_SIGNAL_PROVIDED = 3;
+  // User key stored in host credential vault, calls go through host proxy.
+  CREDENTIAL_MODE_HOST_PROXY = 2;
+  // Host-managed key, metered against user's plan.
+  CREDENTIAL_MODE_HOST_PROVIDED = 3;
   // Local LLM endpoint (e.g. Ollama at localhost:11434).
   CREDENTIAL_MODE_LOCAL_LLM = 4;
 }
