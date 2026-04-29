@@ -138,6 +138,26 @@ export interface RuntimeClient {
   pauseRuntime(runtimeId: string): Promise<void>;
   destroyRuntime(runtimeId: string): Promise<void>;
   buildInfo(): Promise<BuildInfo>;
+  /**
+   * Register an Arrow IPC stream as a queryable table named `id`.
+   * Polars-SQL cells whose `reads=` references this id will see it
+   * as a registered table source. Called once per memory block at
+   * mount; later overwritten by appendMemory after each write.
+   */
+  registerMemory?(id: string, bytes: Uint8Array): Promise<void>;
+  /**
+   * Append rows to a registered memory table. `rows` is encoded as
+   * an Arrow IPC stream containing one or more record batches that
+   * the runtime concatenates onto the existing buffer in WASM
+   * linear memory. Returns the new aggregate sha256 + byte length
+   * so the host can persist on save.
+   */
+  appendMemory?(id: string, rows: Uint8Array): Promise<{ sha256: string; bytes: number }>;
+  /**
+   * Export the current state of a memory table as Arrow IPC bytes
+   * for re-saving into the workbook HTML.
+   */
+  exportMemory?(id: string): Promise<Uint8Array>;
 }
 
 export interface RuntimeClientOptions {
@@ -171,6 +191,14 @@ export function createRuntimeClient(opts: RuntimeClientOptions): RuntimeClient {
   // We don't import the dispatcher module eagerly so workbooks that
   // never use sqlite never pay the @sqlite.org/sqlite-wasm load cost.
   let sqlite: SqliteDispatcher | null = null;
+  // Memory tables — Arrow IPC stream bytes keyed by memory id. The
+  // current implementation holds bytes in JS linear memory and
+  // concatenates streams on append (Arrow IPC is append-native at
+  // the format level). When the Rust runtime exposes
+  // registerArrowTable / appendArrowBatch / exportArrowTable
+  // wasm-bindgen exports, this becomes a thin shim that delegates
+  // to WASM linear memory; the JS-side contract is unchanged.
+  const memoryBuffers = new Map<string, Uint8Array>();
 
   function ensureWasm(): Promise<WorkbookRuntimeWasm> {
     if (!wasmPromise) {
@@ -357,5 +385,50 @@ export function createRuntimeClient(opts: RuntimeClientOptions): RuntimeClient {
       const wasm = await ensureWasm();
       return wasm.build_info();
     },
+
+    async registerMemory(id, bytes) {
+      // First write wins — overwriting an existing memory id at
+      // mount time is suspicious. appendMemory is the right path
+      // for incremental writes.
+      if (memoryBuffers.has(id)) {
+        throw new Error(`memory id already registered: ${id}`);
+      }
+      memoryBuffers.set(id, bytes);
+    },
+
+    async appendMemory(id, rows) {
+      const existing = memoryBuffers.get(id);
+      if (!existing) {
+        throw new Error(`memory id not registered: ${id}`);
+      }
+      // Arrow IPC stream format is append-native: concatenating two
+      // valid streams produces a valid stream as long as the second
+      // stream's leading schema matches the first. We don't enforce
+      // the schema match here — the Rust runtime will reject mismatched
+      // schemas when it parses; for now we trust the host.
+      // TODO: when the Rust side lands, verify schema compatibility
+      // before concatenation.
+      const combined = new Uint8Array(existing.byteLength + rows.byteLength);
+      combined.set(existing, 0);
+      combined.set(rows, existing.byteLength);
+      memoryBuffers.set(id, combined);
+      const sha256 = await sha256HexFromBytes(combined);
+      return { sha256, bytes: combined.byteLength };
+    },
+
+    async exportMemory(id) {
+      const bytes = memoryBuffers.get(id);
+      if (!bytes) throw new Error(`memory id not registered: ${id}`);
+      return bytes;
+    },
   };
+}
+
+/** SHA-256 hex of a byte buffer. Lifted from modelArtifactResolver
+ *  to avoid a circular import. */
+async function sha256HexFromBytes(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes as BufferSource);
+  return [...new Uint8Array(digest)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }

@@ -180,6 +180,16 @@ export type {
   WorkbookDataResolverOptions,
 } from "./workbookDataResolver";
 
+// Workbook memory resolver — materializes <wb-memory> blocks (Arrow
+// IPC streams) into bytes registered as Polars-SQL tables on the
+// runtime client. Append-shaped tabular state with sha256 integrity.
+export { createWorkbookMemoryResolver } from "./workbookMemoryResolver";
+export type {
+  ResolvedMemory,
+  WorkbookMemoryResolver,
+  WorkbookMemoryResolverOptions,
+} from "./workbookMemoryResolver";
+
 // SQLite cell dispatcher — JS-side sidecar around @sqlite.org/sqlite-wasm.
 // Hosts that need to evict cached DB handles (e.g. on workbook unmount)
 // import the dispatcher type and call dispose(). The runtime client wires

@@ -45,6 +45,10 @@ import {
   createWorkbookDataResolver,
   type WorkbookDataResolver,
 } from "./workbookDataResolver";
+import {
+  createWorkbookMemoryResolver,
+  type WorkbookMemoryResolver,
+} from "./workbookMemoryResolver";
 
 // ----------------------------------------------------------------------
 // Plugin registry — third parties can register cell languages.
@@ -553,6 +557,12 @@ export interface MountOptions {
    * extend the allowlist or wire a custom fetch.
    */
   dataResolver?: WorkbookDataResolver;
+  /**
+   * Override the resolver used to materialize `<wb-memory>` blocks.
+   * Default builds one with no `allowedHosts`. Same posture as
+   * dataResolver.
+   */
+  memoryResolver?: WorkbookMemoryResolver;
 }
 
 export async function mountHtmlWorkbook(opts: MountOptions): Promise<{
@@ -613,6 +623,19 @@ export async function mountHtmlWorkbook(opts: MountOptions): Promise<{
   const mergedInputs: Record<string, unknown> = { ...spec.inputs };
   for (const [id, resolved] of resolvedData) {
     mergedInputs[id] = resolved.value;
+  }
+
+  // Register <wb-memory> blocks as queryable tables on the runtime
+  // client. Cells with `reads="memId"` will see the table by that
+  // name in Polars-SQL queries. Memory differs from data: the bytes
+  // don't flow through the executor's input map (cells query via
+  // SQL, not as direct params).
+  const memoryResolver = opts.memoryResolver ?? createWorkbookMemoryResolver();
+  const resolvedMemory = await memoryResolver.resolveAll(spec.memory);
+  for (const [id, resolved] of resolvedMemory) {
+    if (client.registerMemory) {
+      await client.registerMemory(id, resolved.bytes);
+    }
   }
 
   const executor = new ReactiveExecutor({

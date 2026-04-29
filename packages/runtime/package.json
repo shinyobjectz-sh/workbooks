@@ -82,6 +82,10 @@
       "types": "./src/workbookDataResolver.ts",
       "default": "./src/workbookDataResolver.ts"
     },
+    "./workbookMemoryResolver": {
+      "types": "./src/workbookMemoryResolver.ts",
+      "default": "./src/workbookMemoryResolver.ts"
+    },
     "./sqliteSidecar": {
       "types": "./src/sqliteSidecar.ts",
       "default": "./src/sqliteSidecar.ts"

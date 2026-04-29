@@ -99,7 +99,7 @@ polars = { version = "0.45", optional = true, default-features = false, features
   # SQL frontend. Parquet and dtype-full pull in lz4-sys / zstd-sys C deps
   # that need a wasm32 C toolchain — opt those in via a separate feature
   # once we have wasm32 cc set up.
-  "lazy", "csv", "json", "strings", "temporal", "sql",
+  "lazy", "csv", "json", "strings", "temporal", "sql", "ipc",
 ] }
 plotters = { version = "0.3", optional = true, default-features = false, features = [
   "svg_backend", "line_series", "histogram", "area_series",
