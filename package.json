@@ -17,7 +17,8 @@
     "packages/runtime-wasm/examples/notebook-mdx",
     "packages/runtime-wasm/examples/dependency-chain",
     "packages/runtime-wasm/examples/regress-headclose-in-js",
-    "packages/runtime-wasm/examples/hyperframes-studio"
+    "packages/runtime-wasm/examples/hyperframes-studio",
+    "packages/runtime-wasm/examples/talk-to-csv"
   ],
   "scripts": {
     "build": "pnpm -r --filter ./packages/* build",

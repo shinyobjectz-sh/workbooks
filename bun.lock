@@ -14,6 +14,8 @@
       "name": "@work.books/runtime",
       "version": "0.5.0",
       "dependencies": {
+        "@noble/ed25519": "^3",
+        "@noble/hashes": "^2",
         "dompurify": "^3.2.0",
         "fflate": "^0.8.0",
       },
@@ -62,7 +64,7 @@
     },
     "packages/runtime-wasm": {
       "name": "@work.books/runtime-wasm",
-      "version": "0.1.0",
+      "version": "0.2.4",
     },
     "packages/runtime-wasm/examples/dependency-chain": {
       "name": "@work.books/example-dependency-chain",
@@ -165,6 +167,21 @@
         "@sveltejs/vite-plugin-svelte": "^5.0.0",
         "@tailwindcss/vite": "^4.2.0",
         "@work.books/cli": "*",
+        "tailwindcss": "^4.2.0",
+        "vite": "^6.0.0",
+      },
+    },
+    "packages/runtime-wasm/examples/talk-to-csv": {
+      "name": "@work.books/example-talk-to-csv",
+      "version": "0.1.0",
+      "dependencies": {
+        "svelte": "^5.0.0",
+      },
+      "devDependencies": {
+        "@sveltejs/vite-plugin-svelte": "^5.0.0",
+        "@tailwindcss/vite": "^4.2.0",
+        "@work.books/cli": "*",
+        "@work.books/runtime": "*",
         "tailwindcss": "^4.2.0",
         "vite": "^6.0.0",
       },
@@ -374,6 +391,8 @@
     "@work.books/example-svelte-app": ["@work.books/example-svelte-app@workspace:packages/runtime-wasm/examples/svelte-app"],
 
     "@work.books/example-tailwind-app": ["@work.books/example-tailwind-app@workspace:packages/runtime-wasm/examples/tailwind-app"],
+
+    "@work.books/example-talk-to-csv": ["@work.books/example-talk-to-csv@workspace:packages/runtime-wasm/examples/talk-to-csv"],
 
     "@work.books/regress-headclose-in-js": ["@work.books/regress-headclose-in-js@workspace:packages/runtime-wasm/examples/regress-headclose-in-js"],
 
