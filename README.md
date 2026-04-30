@@ -14,6 +14,31 @@ with components, a framework like Svelte. Run it from `file://`, a USB
 stick, your inbox, or behind a CDN. Compose workbooks as building blocks
 of larger workbooks.
 
+## Make one in 60 seconds
+
+```bash
+npm install -g @work.books/cli
+workbook init my-thing
+cd my-thing
+npm install
+npm run dev
+```
+
+Open the link the terminal prints. That's a working workbook — edit
+`main.js`, save, the page reloads. When you're done, `npm run build`
+produces one `dist/my-thing.workbook.html` file you can email to anyone.
+
+The CLI ships three commands you'll use every day:
+
+| | |
+|---|---|
+| `workbook dev`     | live-reload server while you're editing |
+| `workbook build`   | bundle to a single `.workbook.html` artifact |
+| `workbook check`   | lint the project — catches the dozen subtle gotchas the runtime cares about (run `workbook explain <rule>` for fix help) |
+
+That's the whole product. Everything below this section is reference for
+when you want to know more.
+
 ## Three canonical types
 
 A workbook's `manifest.type` field declares which rendering profile a
