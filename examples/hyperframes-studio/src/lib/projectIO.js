@@ -104,6 +104,11 @@ export async function openProject(file) {
 
 // ─── export ───────────────────────────────────────────────────────────
 
+// IFRAME_RUNTIME_AUTOPLAY is self-wrapped in a <script>...</script>
+// (the wrapper is split across string concatenations in initial.js so
+// the host page's HTML parser doesn't terminate it early). We inject
+// it RAW — wrapping it in another <script> tag here would nest tags
+// and break the HTML parser at load time.
 const HYPERFRAME_TEMPLATE = `<!doctype html>
 <html lang="en">
 <head>
@@ -117,7 +122,7 @@ const HYPERFRAME_TEMPLATE = `<!doctype html>
 <body>
 %%COMPOSITION%%
 <!-- BEGIN hyperframe-runtime -->
-<script>%%RUNTIME%%</script>
+%%RUNTIME%%
 <!-- END hyperframe-runtime -->
 </body>
 </html>
