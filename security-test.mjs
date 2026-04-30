@@ -1,0 +1,237 @@
+// Adversarial test harness for the age-format <wb-data> encryption.
+// Probes the failure modes that matter for "send this file with
+// secrets to a colleague": wrong password, tampered ciphertext,
+// truncation, race conditions, etc. Run with:
+//   node --experimental-strip-types security-test.mjs
+
+import {
+  encryptWithPassphrase,
+  decryptWithPassphrase,
+  looksLikeAgeEnvelope,
+} from "./packages/runtime/src/encryption.ts";
+
+const PASSWORD = "correct-horse-battery-staple";
+const WRONG_PASSWORD = "tr0ub4dor&3";
+const PLAINTEXT = new TextEncoder().encode(
+  "id,name,salary\n1,alice,150000\n2,bob,90000\n3,carol,210000\n",
+);
+
+let pass = 0;
+let fail = 0;
+function expect(name, ok, detail = "") {
+  const tag = ok ? "PASS" : "FAIL";
+  console.log(`${tag} ${name}${detail ? `  (${detail})` : ""}`);
+  ok ? pass++ : fail++;
+}
+
+async function main() {
+  const cipher = await encryptWithPassphrase(PLAINTEXT, PASSWORD);
+
+  // ─── Sanity: positive path works ───
+  {
+    const got = await decryptWithPassphrase(cipher, PASSWORD);
+    expect(
+      "happy path: encrypt+decrypt round-trip",
+      Buffer.compare(got, PLAINTEXT) === 0,
+    );
+  }
+
+  // ─── Magic-bytes detector ───
+  {
+    expect("looksLikeAgeEnvelope: real envelope detected", looksLikeAgeEnvelope(cipher));
+    expect(
+      "looksLikeAgeEnvelope: random bytes rejected",
+      !looksLikeAgeEnvelope(new Uint8Array([0xde, 0xad, 0xbe, 0xef, 0x00, 0x00])),
+    );
+    expect(
+      "looksLikeAgeEnvelope: empty input rejected",
+      !looksLikeAgeEnvelope(new Uint8Array(0)),
+    );
+  }
+
+  // ─── Wrong password ───
+  try {
+    await decryptWithPassphrase(cipher, WRONG_PASSWORD);
+    expect("wrong password rejected", false, "decrypt did NOT throw");
+  } catch (e) {
+    expect("wrong password rejected", true, e?.constructor?.name);
+  }
+
+  // ─── Empty password ───
+  try {
+    await decryptWithPassphrase(cipher, "");
+    expect("empty password rejected", false, "decrypt did NOT throw");
+  } catch (e) {
+    expect("empty password rejected", true);
+  }
+
+  // ─── Tampered ciphertext: flip a byte mid-payload ───
+  {
+    const tampered = new Uint8Array(cipher);
+    // Skip the age header (~few hundred bytes); flip a byte in the
+    // chunk payload area.
+    tampered[Math.floor(tampered.length * 0.7)] ^= 0x01;
+    try {
+      await decryptWithPassphrase(tampered, PASSWORD);
+      expect("byte-flip in ciphertext rejected", false, "decrypt did NOT throw");
+    } catch (e) {
+      expect("byte-flip in ciphertext rejected", true);
+    }
+  }
+
+  // ─── Tampered: flip a byte in the age HEADER ───
+  {
+    const tampered = new Uint8Array(cipher);
+    // Find the first 'X' or known header byte and flip it. Header
+    // is ASCII; flipping mid-base64 should break parsing.
+    for (let i = 30; i < 80; i++) {
+      if (tampered[i] >= 0x41 && tampered[i] <= 0x7a) {
+        tampered[i] ^= 0x01;
+        break;
+      }
+    }
+    try {
+      await decryptWithPassphrase(tampered, PASSWORD);
+      expect("byte-flip in header rejected", false, "decrypt did NOT throw");
+    } catch (e) {
+      expect("byte-flip in header rejected", true);
+    }
+  }
+
+  // ─── Truncation: cut off the last chunk ───
+  {
+    const truncated = cipher.slice(0, cipher.length - 10);
+    try {
+      await decryptWithPassphrase(truncated, PASSWORD);
+      expect("truncated ciphertext rejected", false, "decrypt did NOT throw");
+    } catch (e) {
+      expect("truncated ciphertext rejected", true);
+    }
+  }
+
+  // ─── Truncation: cut off most of the file ───
+  {
+    const stub = cipher.slice(0, 20);
+    try {
+      await decryptWithPassphrase(stub, PASSWORD);
+      expect("severely-truncated rejected", false, "decrypt did NOT throw");
+    } catch (e) {
+      expect("severely-truncated rejected", true);
+    }
+  }
+
+  // ─── Empty input ───
+  try {
+    await decryptWithPassphrase(new Uint8Array(0), PASSWORD);
+    expect("empty input rejected", false, "decrypt did NOT throw");
+  } catch (e) {
+    expect("empty input rejected", true);
+  }
+
+  // ─── Concatenated ciphertexts: try to make the decrypter accept
+  //     extra bytes after a valid age envelope (would let an
+  //     attacker append their own data to a valid file) ───
+  {
+    const padded = new Uint8Array(cipher.length + 100);
+    padded.set(cipher, 0);
+    // Append random garbage after the valid envelope.
+    for (let i = cipher.length; i < padded.length; i++) {
+      padded[i] = Math.floor(Math.random() * 256);
+    }
+    try {
+      const got = await decryptWithPassphrase(padded, PASSWORD);
+      // age might tolerate trailing bytes silently. Let's see if it
+      // decrypts to the original or includes the garbage.
+      const matches = Buffer.compare(got, PLAINTEXT) === 0;
+      if (matches) {
+        expect("trailing-bytes ignored (security note: may be accepted)", true,
+          "age tolerates trailing bytes — does not decode them");
+      } else {
+        expect("trailing-bytes produced different plaintext", false,
+          `unexpected plaintext: ${new TextDecoder().decode(got).slice(0, 50)}...`);
+      }
+    } catch (e) {
+      expect("trailing bytes rejected", true);
+    }
+  }
+
+  // ─── Same plaintext, different ciphertexts (nonce uniqueness) ───
+  {
+    const c1 = await encryptWithPassphrase(PLAINTEXT, PASSWORD);
+    const c2 = await encryptWithPassphrase(PLAINTEXT, PASSWORD);
+    expect(
+      "nonce uniqueness: same plaintext produces different ciphertext",
+      Buffer.compare(c1, c2) !== 0,
+    );
+  }
+
+  // ─── Empty plaintext (zero-byte file) ───
+  {
+    const c = await encryptWithPassphrase(new Uint8Array(0), PASSWORD);
+    const got = await decryptWithPassphrase(c, PASSWORD);
+    expect("zero-byte plaintext round-trips", got.length === 0);
+  }
+
+  // ─── Large plaintext (1 MB) ───
+  {
+    const big = new Uint8Array(1024 * 1024);
+    // Node's WebCrypto getRandomValues caps at 64 KB per call — fill
+    // in chunks. Real-world payload sizes (videos, sqlite dbs) may
+    // hit this; the encryption itself doesn't, but our test fixture
+    // would have crashed pre-fix.
+    for (let i = 0; i < big.length; i += 65536) {
+      crypto.getRandomValues(big.subarray(i, Math.min(i + 65536, big.length)));
+    }
+    const c = await encryptWithPassphrase(big, PASSWORD);
+    const got = await decryptWithPassphrase(c, PASSWORD);
+    expect(
+      "1 MB plaintext round-trips",
+      Buffer.compare(big, got) === 0,
+      `${(c.length / 1024).toFixed(0)} KB ciphertext`,
+    );
+  }
+
+  // ─── Header substitution: prepend a different file's age header ───
+  {
+    const otherCipher = await encryptWithPassphrase(
+      new TextEncoder().encode("attacker-controlled content"),
+      PASSWORD,
+    );
+    // Header ends with "\n--- <base64 HMAC>\n" then binary ciphertext.
+    // Find the newline after the "--- " line.
+    function findHeaderEnd(buf) {
+      // Look for the literal "\n--- " sequence (start of HMAC line).
+      for (let i = 0; i < buf.length - 5; i++) {
+        if (buf[i] === 0x0a && buf[i + 1] === 0x2d && buf[i + 2] === 0x2d &&
+            buf[i + 3] === 0x2d && buf[i + 4] === 0x20) {
+          // Found "\n--- "; now find the newline that ends the line.
+          for (let j = i + 5; j < buf.length; j++) {
+            if (buf[j] === 0x0a) return j + 1; // past the trailing \n
+          }
+          return -1;
+        }
+      }
+      return -1;
+    }
+    const eOrig = findHeaderEnd(cipher);
+    const eOther = findHeaderEnd(otherCipher);
+    if (eOrig > 0 && eOther > 0) {
+      const swapped = new Uint8Array(eOther + cipher.length - eOrig);
+      swapped.set(otherCipher.slice(0, eOther), 0);
+      swapped.set(cipher.slice(eOrig), eOther);
+      try {
+        await decryptWithPassphrase(swapped, PASSWORD);
+        expect("header-substitution rejected", false, "decrypt did NOT throw");
+      } catch (e) {
+        expect("header-substitution rejected", true);
+      }
+    } else {
+      console.log("SKIP header-substitution (couldn't locate header boundary)");
+    }
+  }
+
+  console.log(`\n${pass} pass / ${fail} fail`);
+  process.exit(fail > 0 ? 1 : 0);
+}
+
+await main();

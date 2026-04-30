@@ -103,6 +103,31 @@ export async function runEncrypt(opts) {
   const password = await readPassword(opts);
   if (!password) throw new Error("empty passphrase");
 
+  // Passphrase strength sanity check. age uses scrypt N=2^18 — strong
+  // against casual brute force, but a 6-char dictionary word is still
+  // crackable in days by a determined attacker. We require 14+ chars
+  // OR at least 4 distinct character classes; surface a clear error
+  // rather than silently accepting "hunter2" + asking the user to
+  // ship the file.
+  if (password.length < 14) {
+    const classes = (
+      /[a-z]/.test(password) +
+      /[A-Z]/.test(password) +
+      /[0-9]/.test(password) +
+      /[^A-Za-z0-9]/.test(password)
+    );
+    if (classes < 4) {
+      const allow = process.env.WORKBOOK_ALLOW_WEAK_PASSPHRASE === "1";
+      const msg =
+        `passphrase too weak: ${password.length} chars, ${classes} character classes. ` +
+        `Use 14+ chars OR mix lower/upper/digit/symbol. ` +
+        `(Diceware-style "correct horse battery staple" works well.) ` +
+        `Override with WORKBOOK_ALLOW_WEAK_PASSPHRASE=1 if you understand the risk.`;
+      if (!allow) throw new Error(msg);
+      process.stderr.write(`workbook encrypt: WARNING — ${msg}\n`);
+    }
+  }
+
   // Lazy-load the encryption helper from @work.books/runtime so
   // we share one age-encryption integration. Resolves through the
   // workspace symlink in dev, the published runtime in prod.

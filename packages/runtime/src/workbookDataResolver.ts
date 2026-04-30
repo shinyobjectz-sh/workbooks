@@ -45,8 +45,15 @@ export interface WorkbookDataResolver {
   resolve(block: WorkbookData): Promise<ResolvedData>;
   /** Resolve every block in the workbook in parallel. */
   resolveAll(blocks: WorkbookData[]): Promise<Map<string, ResolvedData>>;
-  /** Drop the in-memory cache. */
+  /** Drop the in-memory result cache. Does NOT clear the cached
+   *  passphrase — call forgetPassphrase() for that. */
   clear(): void;
+  /**
+   * Drop the cached passphrase. Next encrypted-block resolve will
+   * re-prompt via requestPassword. Use when the user "logs out" of
+   * the workbook or to force a re-auth before sensitive operations.
+   */
+  forgetPassphrase(): void;
 }
 
 export interface WorkbookDataResolverOptions {
@@ -138,13 +145,25 @@ export function createWorkbookDataResolver(
   // unlock all blocks. Reset to null on any decryption failure so the
   // next attempt re-prompts (likely wrong passphrase). The cache is
   // resolver-instance scoped — disposed when the resolver is.
+  //
+  // SECURITY NOTE: cachedPassword lives in the JS heap until the
+  // resolver is GC'd or forgetPassphrase() is called. JS doesn't
+  // enforce closure privacy cryptographically, so a determined
+  // attacker with JS-execution privilege in the page can in
+  // principle read it. Phase E (#46) moves the cache to WASM-side.
   let cachedPassword: string | null = null;
+  // Dedup concurrent prompts: if two encrypted blocks resolve in
+  // parallel before the cache is filled, both would call
+  // requestPassword without this single-flight promise.
+  let inflightPasswordRequest: Promise<string> | null = null;
 
   /** Get the passphrase for encrypted blocks, prompting via the
    *  host's requestPassword callback only if we haven't already
-   *  cached one for this resolver lifetime. */
+   *  cached one for this resolver lifetime. Concurrent calls share
+   *  the same promise so the host UX shows ONE prompt. */
   async function getPassword(): Promise<string> {
     if (cachedPassword !== null) return cachedPassword;
+    if (inflightPasswordRequest) return inflightPasswordRequest;
     if (!opts.requestPassword) {
       throw new Error(
         "workbook data: encrypted block encountered but no " +
@@ -152,11 +171,25 @@ export function createWorkbookDataResolver(
           "createWorkbookDataResolver. The host must wire a passphrase UX.",
       );
     }
-    cachedPassword = await opts.requestPassword();
-    if (!cachedPassword) {
-      throw new Error("workbook data: empty passphrase from requestPassword");
-    }
-    return cachedPassword;
+    inflightPasswordRequest = (async () => {
+      try {
+        const pw = await opts.requestPassword!();
+        if (!pw) {
+          throw new Error("workbook data: empty passphrase from requestPassword");
+        }
+        cachedPassword = pw;
+        return pw;
+      } finally {
+        inflightPasswordRequest = null;
+      }
+    })();
+    return inflightPasswordRequest;
+  }
+
+  /** Drop the cached passphrase. */
+  function forgetPassphrase(): void {
+    cachedPassword = null;
+    inflightPasswordRequest = null;
   }
 
   /** Try to decrypt; on failure, drop the cached password so the
@@ -287,5 +320,6 @@ export function createWorkbookDataResolver(
     clear() {
       cache.clear();
     },
+    forgetPassphrase,
   };
 }
