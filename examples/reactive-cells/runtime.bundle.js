@@ -777,57 +777,77 @@ function createBrowserLlmClient(opts) {
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
+      const pendingDeltas = [];
+      const parseEvent = (event) => {
+        for (const line of event.split(/\r?\n/)) {
+          if (!line.startsWith("data:")) continue;
+          const payload = line.slice(5).trim();
+          if (!payload || payload === "[DONE]") continue;
+          try {
+            const ev = JSON.parse(payload);
+            const choice = ev.choices?.[0];
+            if (!choice) continue;
+            const delta = choice.delta ?? {};
+            if (typeof delta.content === "string" && delta.content.length > 0) {
+              finalText += delta.content;
+              pendingDeltas.push(delta.content);
+            }
+            if (Array.isArray(delta.tool_calls)) {
+              for (const tc of delta.tool_calls) {
+                const idx = tc.index ?? 0;
+                const existing = toolCalls.get(idx) ?? {
+                  id: tc.id ?? "",
+                  name: tc.function?.name ?? "",
+                  argumentsJson: ""
+                };
+                if (tc.id) existing.id = tc.id;
+                if (tc.function?.name) existing.name = tc.function.name;
+                if (tc.function?.arguments) existing.argumentsJson += tc.function.arguments;
+                toolCalls.set(idx, existing);
+              }
+            }
+            if (choice.finish_reason) {
+              stopReason = mapStopReason(choice.finish_reason);
+            }
+            if (ev.usage) {
+              usage = {
+                promptTokens: ev.usage.prompt_tokens ?? 0,
+                completionTokens: ev.usage.completion_tokens ?? 0,
+                cachedPromptTokens: ev.usage.prompt_tokens_details?.cached_tokens,
+                reasoningTokens: ev.usage.completion_tokens_details?.reasoning_tokens
+              };
+            }
+          } catch {
+          }
+        }
+      };
       try {
         while (true) {
           const { done, value } = await reader.read();
-          if (done) break;
+          if (done) {
+            buf += decoder.decode();
+            break;
+          }
           buf += decoder.decode(value, { stream: true });
-          let nl;
-          while ((nl = buf.indexOf("\n\n")) >= 0) {
-            const event = buf.slice(0, nl);
-            buf = buf.slice(nl + 2);
-            for (const line of event.split("\n")) {
-              if (!line.startsWith("data:")) continue;
-              const payload = line.slice(5).trim();
-              if (!payload || payload === "[DONE]") continue;
-              try {
-                const ev = JSON.parse(payload);
-                const choice = ev.choices?.[0];
-                if (!choice) continue;
-                const delta = choice.delta ?? {};
-                if (typeof delta.content === "string" && delta.content.length > 0) {
-                  finalText += delta.content;
-                  yield { kind: "delta", text: delta.content };
-                }
-                if (Array.isArray(delta.tool_calls)) {
-                  for (const tc of delta.tool_calls) {
-                    const idx = tc.index ?? 0;
-                    const existing = toolCalls.get(idx) ?? {
-                      id: tc.id ?? "",
-                      name: tc.function?.name ?? "",
-                      argumentsJson: ""
-                    };
-                    if (tc.id) existing.id = tc.id;
-                    if (tc.function?.name) existing.name = tc.function.name;
-                    if (tc.function?.arguments) existing.argumentsJson += tc.function.arguments;
-                    toolCalls.set(idx, existing);
-                  }
-                }
-                if (choice.finish_reason) {
-                  stopReason = mapStopReason(choice.finish_reason);
-                }
-                if (ev.usage) {
-                  usage = {
-                    promptTokens: ev.usage.prompt_tokens ?? 0,
-                    completionTokens: ev.usage.completion_tokens ?? 0,
-                    cachedPromptTokens: ev.usage.prompt_tokens_details?.cached_tokens,
-                    reasoningTokens: ev.usage.completion_tokens_details?.reasoning_tokens
-                  };
-                }
-              } catch {
-              }
+          const delim = /\r?\n\r?\n/g;
+          let m;
+          let lastIdx = 0;
+          while ((m = delim.exec(buf)) !== null) {
+            const event = buf.slice(lastIdx, m.index);
+            lastIdx = m.index + m[0].length;
+            parseEvent(event);
+            while (pendingDeltas.length > 0) {
+              yield { kind: "delta", text: pendingDeltas.shift() };
             }
           }
+          if (lastIdx > 0) buf = buf.slice(lastIdx);
+        }
+        if (buf.trim().length > 0) {
+          parseEvent(buf);
+          while (pendingDeltas.length > 0) {
+            yield { kind: "delta", text: pendingDeltas.shift() };
+          }
+          buf = "";
         }
       } catch (err2) {
         yield {

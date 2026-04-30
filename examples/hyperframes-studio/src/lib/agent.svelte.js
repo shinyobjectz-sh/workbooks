@@ -111,6 +111,12 @@ export function registerExtraTool(tool) {
   else extraTools.push(tool);
 }
 
+/** Remove a registered extra tool by name. Used by plugin teardown. */
+export function unregisterExtraTool(name) {
+  const idx = extraTools.findIndex((t) => t.definition.name === name);
+  if (idx >= 0) extraTools.splice(idx, 1);
+}
+
 export function buildTools() {
   return [
     {
