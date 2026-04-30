@@ -167,6 +167,13 @@ export interface WorkbookRuntimeWasm {
   /** Compat path — decrypt + return plaintext to JS. Used by code
    *  that hasn't migrated to handles. Crosses the boundary. */
   ageDecryptToBytes?: (ciphertext: Uint8Array, passphrase: string) => Uint8Array;
+  /** Phase D — decrypt with X25519 identities (`AGE-SECRET-KEY-1...`
+   *  strings). Identities are tried in order; first match unwraps.
+   *  Plaintext stays in linear memory like ageDecryptToHandle. */
+  ageDecryptWithIdentitiesToHandle?: (
+    ciphertext: Uint8Array,
+    identities: string[],
+  ) => number;
   /** Free the bytes at a handle. Returns true if slot was occupied. */
   handleDispose?: (id: number) => boolean;
   /** Plaintext byte-length at a handle; 0 if disposed/unknown. */

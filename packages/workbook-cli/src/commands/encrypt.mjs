@@ -42,6 +42,52 @@ const ALLOWED_MIMES = new Set([
   "application/octet-stream",
 ]);
 
+/** Phase D — collect X25519 recipients from --recipient (literal) and
+ *  --recipient-file (first line of a file). Both flags are repeatable
+ *  (see MULTI_VALUE_FLAGS in bin/workbook.mjs). Returns a flat array
+ *  of `age1...` strings. */
+async function readRecipients(opts) {
+  const recipients = [];
+  const direct = opts.recipient;
+  if (direct !== undefined) {
+    const arr = Array.isArray(direct) ? direct : [direct];
+    for (const v of arr) {
+      if (typeof v !== "string" || !v.trim()) continue;
+      recipients.push(v.trim());
+    }
+  }
+  const files = opts["recipient-file"];
+  if (files !== undefined) {
+    const arr = Array.isArray(files) ? files : [files];
+    for (const f of arr) {
+      const data = await fs.readFile(f, "utf8");
+      const line = data.split(/\r?\n/, 1)[0].trim();
+      if (line) recipients.push(line);
+    }
+  }
+  // Validate format — `age1...` recipients have a known prefix. We
+  // don't fully validate the bech32 check here (typage will when it
+  // tries to encrypt); a prefix check catches the common
+  // mistake of passing an `AGE-SECRET-KEY-1...` (the IDENTITY) as a
+  // recipient by accident.
+  for (const r of recipients) {
+    if (r.startsWith("AGE-SECRET-KEY-")) {
+      throw new Error(
+        `--recipient '${r.slice(0, 24)}...' looks like a SECRET key. ` +
+          `Use the public 'age1...' recipient (the .pub file from ` +
+          `\`workbook keygen --type x25519\`).`,
+      );
+    }
+    if (!r.startsWith("age1") && !r.startsWith("age-plugin-")) {
+      throw new Error(
+        `--recipient '${r.slice(0, 24)}...' doesn't look like an age recipient. ` +
+          `Expected 'age1...' or an 'age-plugin-...' string.`,
+      );
+    }
+  }
+  return recipients;
+}
+
 async function readPassword(opts) {
   if (opts["password-stdin"]) {
     return readStdinFirstLine();
@@ -123,16 +169,31 @@ export async function runEncrypt(opts) {
     );
   }
 
-  const password = await readPassword(opts);
-  if (!password) throw new Error("empty passphrase");
+  // Phase D — recipients are optional; either a passphrase OR
+  // recipients (or both, combined) must unlock the file.
+  const recipients = await readRecipients(opts);
+  const hasPasswordFlag = Boolean(
+    opts["password-stdin"] || opts["password-file"] || opts.password,
+  );
+  let password = "";
+  if (hasPasswordFlag) {
+    password = await readPassword(opts);
+    if (!password) throw new Error("empty passphrase");
+  } else if (recipients.length === 0) {
+    throw new Error(
+      "no unlock material: pass --password / --password-stdin / --password-file " +
+        "and/or one or more --recipient age1... values",
+    );
+  }
 
   // Passphrase strength sanity check. age uses scrypt N=2^18 — strong
   // against casual brute force, but a 6-char dictionary word is still
   // crackable in days by a determined attacker. We require 14+ chars
   // OR at least 4 distinct character classes; surface a clear error
   // rather than silently accepting "hunter2" + asking the user to
-  // ship the file.
-  if (password.length < 14) {
+  // ship the file. Skipped when no passphrase was supplied
+  // (recipient-only mode).
+  if (password && password.length < 14) {
     const classes = (
       /[a-z]/.test(password) +
       /[A-Z]/.test(password) +
@@ -153,12 +214,20 @@ export async function runEncrypt(opts) {
 
   // Lazy-load the encryption + signature helpers from @work.books/runtime
   // so we share one integration across CLI + runtime.
-  const { encryptWithPassphrase, AGE_ENCRYPTION_TAG } =
+  const { encryptWithPassphrase, encryptToRecipients, AGE_ENCRYPTION_TAG } =
     await import("@work.books/runtime/encryption");
 
   const plaintext = new Uint8Array(await fs.readFile(opts.in));
   const sha = await sha256Hex(plaintext);
-  const ciphertext = await encryptWithPassphrase(plaintext, password);
+  let ciphertext;
+  if (recipients.length > 0) {
+    ciphertext = await encryptToRecipients(plaintext, {
+      recipients,
+      passphrase: password || undefined,
+    });
+  } else {
+    ciphertext = await encryptWithPassphrase(plaintext, password);
+  }
   const body = bytesToBase64(ciphertext);
 
   // Optional Ed25519 signing — closes the attribute-tamper + author-
@@ -201,6 +270,11 @@ export async function runEncrypt(opts) {
     `workbook encrypt: ${opts.in} (${plaintext.byteLength} B) → ` +
     `${opts.out} (${body.length} B base64)\n` +
     `  id=${opts.id} mime=${mime} sha256=${sha}\n` +
+    (recipients.length > 0
+      ? `  recipients: ${recipients.length} (${recipients
+          .map((r) => `${r.slice(0, 14)}…`)
+          .join(", ")})${password ? " + passphrase" : ""}\n`
+      : "") +
     (pubkey ? `  signed by ${pubkey.slice(0, 16)}...\n` : "");
   process.stdout.write(summary);
 }

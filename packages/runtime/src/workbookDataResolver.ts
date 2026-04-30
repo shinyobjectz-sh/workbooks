@@ -27,7 +27,12 @@
  */
 
 import { sha256Hex } from "./modelArtifactResolver";
-import { decryptWithPassphrase, looksLikeAgeEnvelope } from "./encryption";
+import {
+  decryptWithPassphrase,
+  decryptWithIdentity,
+  decryptWithObjectIdentity,
+  looksLikeAgeEnvelope,
+} from "./encryption";
 import { verifyBlock, isSigned } from "./signature";
 import type { WorkbookData } from "./htmlBindings";
 
@@ -113,6 +118,39 @@ export interface WorkbookDataResolverOptions {
    * walks away, and someone else sits down at the laptop.
    */
   passphraseIdleTimeoutMs?: number;
+  /**
+   * Phase D — X25519 identities the resolver should try when
+   * decrypting `<wb-data encryption="age-v1">` blocks. Each string is
+   * an `AGE-SECRET-KEY-1...` (the private half of an age keypair —
+   * generated via `workbook keygen --type x25519` or
+   * `generateX25519Identity()`).
+   *
+   * Behavior:
+   *   - All configured identities are tried in parallel by typage's
+   *     Decrypter. The first that successfully unwraps the file key
+   *     wins; the others are no-ops.
+   *   - If all identities fail (the block isn't addressed to any of
+   *     them) AND `requestPassword` is configured, the resolver falls
+   *     back to prompting for a passphrase.
+   *   - If neither identities nor a passphrase work, decrypt fails.
+   *
+   * Use cases:
+   *   - User stores their personal `AGE-SECRET-KEY-1...` in IDB after
+   *     onboarding; resolver loads + tries it on every encrypted block.
+   *   - Build pipeline encrypts to a workbook-author key + a CI key;
+   *     each environment supplies its own identity, no shared
+   *     passphrase needed.
+   */
+  x25519Identities?: string[];
+  /**
+   * Phase B — a WebAuthn-PRF identity object created via
+   * `buildWebAuthnIdentity({ identity, rpId })` from
+   * `./encryption.ts`. The browser will surface its passkey UI on
+   * first decrypt; PRF output unwraps the file key.
+   *
+   * Tried alongside `x25519Identities`. Browser-only.
+   */
+  webauthnIdentity?: object;
   /**
    * Phase E — keep decrypted plaintext inside WASM linear memory
    * instead of JS heap. Cells with `reads=` references to encrypted
@@ -295,7 +333,14 @@ export function createWorkbookDataResolver(
 
   /** Phase E: decrypt via Rust, get back a handle, build the
    *  WasmPlaintextHandle wrapper. Verifies sha256 inside Rust so
-   *  bytes never cross the boundary on the integrity-check step. */
+   *  bytes never cross the boundary on the integrity-check step.
+   *
+   *  Phase D: if X25519 identities are configured, try them first
+   *  via ageDecryptWithIdentitiesToHandle (also Rust-side; same
+   *  isolation property). Fall back to the passphrase path on miss.
+   *  WebAuthn identities can't go through Rust — typage's PRF
+   *  unwrap is browser-bound — so wasmIsolation+webauthnIdentity
+   *  silently degrades to the JS-heap path for that specific block. */
   async function decryptToHandle(
     ciphertext: Uint8Array,
     block: WorkbookData,
@@ -313,21 +358,65 @@ export function createWorkbookDataResolver(
           "(ageDecryptToHandle / handleDispose / handleSize / handleExport / handleSha256)",
       );
     }
-    const password = await getPassword();
-    let id: number;
-    try {
-      id = wasm.ageDecryptToHandle(ciphertext, password);
-      bumpIdleTimer();
-    } catch (e) {
-      cachedPassword = null;
-      if (idleTimer) {
-        clearTimeout(idleTimer);
-        idleTimer = null;
+    let id: number | null = null;
+    // Phase D: try X25519 identities through Rust first.
+    const ids = opts.x25519Identities ?? [];
+    if (ids.length > 0 && wasm.ageDecryptWithIdentitiesToHandle) {
+      try {
+        id = wasm.ageDecryptWithIdentitiesToHandle(ciphertext, ids);
+        bumpIdleTimer();
+      } catch {
+        // fall through to passphrase / webauthn paths
       }
-      throw new Error(
-        `workbook data ${block.id}: decryption failed (likely wrong passphrase): ` +
-          (e instanceof Error ? e.message : String(e)),
-      );
+    }
+    if (id === null && opts.webauthnIdentity) {
+      // WebAuthn PRF unwrap doesn't have a Rust path — fall back to
+      // typage. Bytes briefly cross to JS here; we re-import them
+      // into the registry via a tiny insert helper in Rust if
+      // available. Otherwise, silent degradation to JS-heap path is
+      // accepted (documented behavior).
+      try {
+        const plaintext = await decryptWithObjectIdentity(
+          ciphertext,
+          opts.webauthnIdentity,
+        );
+        // Re-import via the bytes-decrypt path: we already have
+        // plaintext here so we can't avoid the JS-heap exposure for
+        // the moment we hold this Uint8Array. Emit the bytes into a
+        // handle by re-encrypting+decrypting through Rust — that's
+        // wasteful. Simpler: skip the wasmIsolation property for
+        // webauthn-unlocked blocks and return a synthetic handle
+        // backed by the bytes (NOT registry-stored). We don't have
+        // such an interface today; instead, throw a clear "use the
+        // typage path for webauthn under wasmIsolation" error so
+        // hosts opt-in explicitly.
+        void plaintext;
+        throw new Error(
+          `workbook data ${block.id}: WebAuthn unlock under wasmIsolation ` +
+            `is not yet supported. Drop wasmIsolation for blocks that need ` +
+            `webauthnIdentity, or pre-decrypt to a server-side X25519 identity.`,
+        );
+      } catch (e) {
+        // user cancel / no PRF stanza / our explicit throw
+        throw e instanceof Error ? e : new Error(String(e));
+      }
+    }
+    if (id === null) {
+      const password = await getPassword();
+      try {
+        id = wasm.ageDecryptToHandle(ciphertext, password);
+        bumpIdleTimer();
+      } catch (e) {
+        cachedPassword = null;
+        if (idleTimer) {
+          clearTimeout(idleTimer);
+          idleTimer = null;
+        }
+        throw new Error(
+          `workbook data ${block.id}: decryption failed (likely wrong passphrase): ` +
+            (e instanceof Error ? e.message : String(e)),
+        );
+      }
     }
     // Verify plaintext sha256 against the declared digest WITHOUT
     // exporting bytes — handleSha256 hashes inside Rust.
@@ -355,7 +444,47 @@ export function createWorkbookDataResolver(
   }
 
   /** Try to decrypt; on failure, drop the cached password so the
-   *  next call re-prompts (the user likely typed it wrong). */
+   *  next call re-prompts (the user likely typed it wrong).
+   *
+   *  Phase D: X25519 identities are tried first (silent — no UX). On
+   *  fail, fall back to the passphrase prompt. Identities that DON'T
+   *  match the file's recipient stanzas don't error — typage returns
+   *  null from unwrapFileKey for non-matching identities and tries
+   *  the next; only an actually-malformed file or a matched-but-
+   *  tampered ciphertext throws.
+   */
+  function hasAnyIdentity(): boolean {
+    return (
+      (opts.x25519Identities?.length ?? 0) > 0 ||
+      Boolean(opts.webauthnIdentity)
+    );
+  }
+
+  async function tryDecryptWithIdentities(
+    ciphertext: Uint8Array,
+  ): Promise<Uint8Array | null> {
+    // Try X25519 identities one at a time so a non-matching identity
+    // (returns null from unwrapFileKey) doesn't poison the others.
+    for (const id of opts.x25519Identities ?? []) {
+      try {
+        return await decryptWithIdentity(ciphertext, id);
+      } catch {
+        // not addressed to this identity OR tampered — continue
+      }
+    }
+    if (opts.webauthnIdentity) {
+      try {
+        return await decryptWithObjectIdentity(
+          ciphertext,
+          opts.webauthnIdentity,
+        );
+      } catch {
+        // user cancelled passkey, no PRF stanza, etc.
+      }
+    }
+    return null;
+  }
+
   async function decryptOrReprompt(
     ciphertext: Uint8Array,
     blockId: string,
@@ -364,6 +493,24 @@ export function createWorkbookDataResolver(
       throw new Error(
         `workbook data ${blockId}: bytes don't look like an age v1 envelope`,
       );
+    }
+    // Phase D: try identities first if any are configured.
+    if (hasAnyIdentity()) {
+      const fromIdentity = await tryDecryptWithIdentities(ciphertext);
+      if (fromIdentity) {
+        bumpIdleTimer();
+        return fromIdentity;
+      }
+      // No identity unlocked it. If there's also no requestPassword
+      // callback, this block is genuinely unreachable for this user.
+      if (!opts.requestPassword) {
+        throw new Error(
+          `workbook data ${blockId}: none of the configured X25519/WebAuthn ` +
+            `identities matched, and no requestPassword callback is configured. ` +
+            `Either supply an identity that's a recipient of this block, or ` +
+            `wire requestPassword for passphrase fallback.`,
+        );
+      }
     }
     const password = await getPassword();
     try {

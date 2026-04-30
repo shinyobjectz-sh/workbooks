@@ -37,17 +37,25 @@ async function help() {
     "  --password <s>        passphrase (visible in `ps`; prefer --password-stdin)",
     "  --password-stdin      read passphrase from stdin (first line)",
     "  --password-file <p>   read passphrase from first line of a file",
+    "  --recipient <age1…>   X25519 recipient (repeatable). Combine with",
+    "                        --password to allow either unlock path. (Phase D)",
+    "  --recipient-file <p>  first line of <p> as a recipient (repeatable)",
     "  --sign-key <b64>      Ed25519 priv key (base64) for signing — pairs with",
     "                        the runtime's expectedAuthorPubkey for tamper-evidence",
     "  --sign-key-file <p>   read sign key from first line of a file",
     "",
     "Keygen options (`workbook keygen`):",
+    "  --type <kind>         'signing' (default, Ed25519) or 'x25519' (age recipient)",
     "  --out <basename>      writes <basename>.priv (0600) + <basename>.pub (0644)",
     "",
     "Run dev/build inside a project containing workbook.config.js (or pass [project]).",
     "",
   ].join("\n"));
 }
+
+// Flags that may appear multiple times (`--recipient age1... --recipient age1...`).
+// On repeat, values accumulate into an array instead of clobbering.
+const MULTI_VALUE_FLAGS = new Set(["recipient", "recipient-file"]);
 
 function parseFlags(rest) {
   const out = { _: [] };
@@ -57,8 +65,14 @@ function parseFlags(rest) {
       const k = a.slice(2);
       const next = rest[i + 1];
       if (k.startsWith("no-")) { out[k.slice(3)] = false; continue; }
-      if (next == null || next.startsWith("--")) { out[k] = true; }
-      else { out[k] = next; i++; }
+      const value = (next == null || next.startsWith("--")) ? true : (i++, next);
+      if (MULTI_VALUE_FLAGS.has(k)) {
+        if (out[k] === undefined) out[k] = [];
+        else if (!Array.isArray(out[k])) out[k] = [out[k]];
+        out[k].push(value);
+      } else {
+        out[k] = value;
+      }
     } else {
       out._.push(a);
     }

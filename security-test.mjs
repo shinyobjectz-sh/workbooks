@@ -8,6 +8,12 @@
 import {
   encryptWithPassphrase,
   decryptWithPassphrase,
+  encryptToRecipients,
+  decryptWithIdentity,
+  generateX25519Identity,
+  createWebAuthnCredential,
+  buildWebAuthnRecipient,
+  buildWebAuthnIdentity,
   looksLikeAgeEnvelope,
 } from "./packages/runtime/src/encryption.ts";
 import {
@@ -485,6 +491,259 @@ async function main() {
       id1 === id2,
     );
     wasm.handleDispose(id2);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Phase D: X25519 multi-recipient
+  //
+  // Mints three keypairs, encrypts to all three, verifies each
+  // individually decrypts. Then fuzzes failure modes: wrong identity,
+  // recipient-only file refuses passphrase, swapping recipients.
+  // Also exercises the Rust path (ageDecryptWithIdentitiesToHandle).
+  // ─────────────────────────────────────────────────────────────
+
+  const alice = await generateX25519Identity();
+  const bob = await generateX25519Identity();
+  const carol = await generateX25519Identity();
+
+  // ─── encrypt to three recipients ───
+  const multiCipher = await encryptToRecipients(PLAINTEXT, {
+    recipients: [alice.recipient, bob.recipient, carol.recipient],
+  });
+  expect(
+    "Phase D encrypt: produces a valid age envelope",
+    looksLikeAgeEnvelope(multiCipher),
+  );
+
+  // ─── each recipient can decrypt independently ───
+  for (const [name, kp] of [["alice", alice], ["bob", bob], ["carol", carol]]) {
+    const got = await decryptWithIdentity(multiCipher, kp.identity);
+    expect(
+      `Phase D: ${name} decrypts the multi-recipient file`,
+      Buffer.compare(got, PLAINTEXT) === 0,
+    );
+  }
+
+  // ─── stranger's identity fails ───
+  {
+    const stranger = await generateX25519Identity();
+    let threw = false;
+    try {
+      await decryptWithIdentity(multiCipher, stranger.identity);
+    } catch {
+      threw = true;
+    }
+    expect("Phase D: stranger identity rejected", threw);
+  }
+
+  // ─── identity-format guard: passing a recipient as identity rejected ───
+  {
+    let threw = false;
+    try {
+      await decryptWithIdentity(multiCipher, alice.recipient);
+    } catch {
+      threw = true;
+    }
+    expect("Phase D: passing 'age1...' (a recipient) as identity rejected", threw);
+  }
+
+  // ─── combine passphrase + recipients: typage 0.2 limitation ───
+  // age the format supports it; typage 0.2 doesn't expose
+  // ScryptRecipient. We surface this with a clear error rather than
+  // silently dropping one of the unlock paths. (Bump typage past 0.2
+  // OR patch it to re-export ScryptRecipient to lift this.)
+  {
+    let threw = false;
+    try {
+      await encryptToRecipients(PLAINTEXT, {
+        recipients: [alice.recipient],
+        passphrase: PASSWORD,
+      });
+    } catch (e) {
+      threw = /not supported|ScryptRecipient/.test(String(e?.message ?? e));
+    }
+    expect(
+      "Phase D: combining passphrase + recipients fails clearly under typage 0.2",
+      threw,
+    );
+  }
+
+  // ─── tamper: byte-flip in body still rejected with X25519 unlock ───
+  {
+    const tampered = new Uint8Array(multiCipher);
+    tampered[Math.floor(tampered.length * 0.7)] ^= 0x01;
+    let threw = false;
+    try {
+      await decryptWithIdentity(tampered, alice.identity);
+    } catch {
+      threw = true;
+    }
+    expect("Phase D: byte-flip in multi-recipient body rejected", threw);
+  }
+
+  // ─── reject empty/missing recipients in encrypt ───
+  {
+    let threw = false;
+    try {
+      await encryptToRecipients(PLAINTEXT, {});
+    } catch {
+      threw = true;
+    }
+    expect(
+      "Phase D: encryptToRecipients rejects empty config",
+      threw,
+    );
+  }
+
+  // ─── nonce uniqueness across multi-recipient files ───
+  {
+    const a = await encryptToRecipients(PLAINTEXT, {
+      recipients: [alice.recipient],
+    });
+    const b = await encryptToRecipients(PLAINTEXT, {
+      recipients: [alice.recipient],
+    });
+    expect(
+      "Phase D: same plaintext + same recipient produces different ciphertext",
+      Buffer.compare(a, b) !== 0,
+    );
+  }
+
+  // ─── Rust path (ageDecryptWithIdentitiesToHandle) ───
+  if (wasm.ageDecryptWithIdentitiesToHandle) {
+    const handleId = wasm.ageDecryptWithIdentitiesToHandle(
+      multiCipher,
+      [bob.identity],
+    );
+    expect(
+      "Phase D Rust: identity decrypt returns numeric handle",
+      typeof handleId === "number" && handleId >= 0,
+    );
+    expect(
+      "Phase D Rust: handleSize matches plaintext length",
+      wasm.handleSize(handleId) === PLAINTEXT.byteLength,
+    );
+    const expectedSha = await crypto.subtle.digest("SHA-256", PLAINTEXT)
+      .then((d) =>
+        [...new Uint8Array(d)]
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join(""),
+      );
+    expect(
+      "Phase D Rust: handleSha256 matches plaintext digest",
+      wasm.handleSha256(handleId) === expectedSha,
+    );
+    wasm.handleDispose(handleId);
+
+    // Multiple identities — Rust tries each in turn.
+    const handleId2 = wasm.ageDecryptWithIdentitiesToHandle(
+      multiCipher,
+      [(await generateX25519Identity()).identity, carol.identity],
+    );
+    expect(
+      "Phase D Rust: tries multiple identities, second matches",
+      wasm.handleSize(handleId2) === PLAINTEXT.byteLength,
+    );
+    wasm.handleDispose(handleId2);
+
+    // No matching identity — error.
+    let threw = false;
+    try {
+      const stranger = await generateX25519Identity();
+      wasm.ageDecryptWithIdentitiesToHandle(multiCipher, [stranger.identity]);
+    } catch {
+      threw = true;
+    }
+    expect("Phase D Rust: stranger identity rejected", threw);
+
+    // Malformed identity — error.
+    let threwMalformed = false;
+    try {
+      wasm.ageDecryptWithIdentitiesToHandle(multiCipher, ["NOT-AN-IDENTITY"]);
+    } catch {
+      threwMalformed = true;
+    }
+    expect("Phase D Rust: malformed identity rejected", threwMalformed);
+  } else {
+    console.log("SKIP Phase D Rust (ageDecryptWithIdentitiesToHandle binding missing)");
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Phase B: WebAuthn-PRF unlock
+  //
+  // WebAuthn requires a browser; we can't invoke createCredential or
+  // exercise an actual passkey in Node. What we CAN verify here is:
+  //   - the helpers exist and load without throwing at module-import
+  //   - createCredential surfaces a clear "no WebAuthn available"
+  //     error rather than crashing
+  //   - buildWebAuthnRecipient / buildWebAuthnIdentity construct
+  //     identity objects that typage's Decrypter accepts (so the
+  //     Phase D wiring composes cleanly)
+  //
+  // The full encrypt-decrypt round-trip lives in browser tests.
+  // ─────────────────────────────────────────────────────────────
+
+  // ─── createCredential surfaces a clear error in Node ───
+  {
+    let threw = false;
+    let msg = "";
+    try {
+      await createWebAuthnCredential({ keyName: "test", rpId: "example.com" });
+    } catch (e) {
+      threw = true;
+      msg = String(e?.message ?? e);
+    }
+    expect(
+      "Phase B: createWebAuthnCredential errors clearly in Node",
+      threw,
+      msg.slice(0, 60),
+    );
+  }
+
+  // ─── buildWebAuthnIdentity constructs an Identity-shaped object ───
+  // The constructor doesn't trigger WebAuthn — that happens during
+  // unwrapFileKey. So we should be able to instantiate it in Node.
+  {
+    let id;
+    let constructed = false;
+    try {
+      id = await buildWebAuthnIdentity({ rpId: "example.com" });
+      constructed = id !== null && typeof id === "object";
+    } catch {
+      // Some typage builds may eagerly probe for navigator.credentials.
+    }
+    expect(
+      "Phase B: buildWebAuthnIdentity returns an Identity-shaped object",
+      constructed,
+    );
+    if (constructed) {
+      expect(
+        "Phase B: WebAuthn identity has unwrapFileKey method (typage Identity contract)",
+        typeof (id).unwrapFileKey === "function",
+      );
+    }
+  }
+
+  // ─── buildWebAuthnRecipient is similarly Recipient-shaped ───
+  {
+    let recip;
+    let constructed = false;
+    try {
+      recip = await buildWebAuthnRecipient({ rpId: "example.com" });
+      constructed = recip !== null && typeof recip === "object";
+    } catch {
+      // ignore — same caveat as above
+    }
+    expect(
+      "Phase B: buildWebAuthnRecipient returns a Recipient-shaped object",
+      constructed,
+    );
+    if (constructed) {
+      expect(
+        "Phase B: WebAuthn recipient has wrapFileKey method (typage Recipient contract)",
+        typeof (recip).wrapFileKey === "function",
+      );
+    }
   }
 
   console.log(`\n${pass} pass / ${fail} fail`);

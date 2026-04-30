@@ -1,6 +1,6 @@
 {
   "name": "@work.books/runtime-wasm",
-  "version": "0.2.0",
+  "version": "0.2.3",
   "description": "Workbook execution runtime — Rust+WASM bindings for client-side Polars SQL, Loro CRDT, Prolly Tree history, Rhai scripting, Candle inference, Linfa training, and Plotters charts. Consumed by @work.books/cli at build time and by the workbook-runtime UI package at render time.",
   "license": "Apache-2.0",
   "repository": {

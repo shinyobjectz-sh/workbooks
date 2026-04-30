@@ -205,19 +205,135 @@ Out of our control but worth knowing:
 | Plaintext in JS heap | E | `#46` | **closed (Phase E shipped, with `handleExport` caveat)** |
 | Attribute tamper detection | C | `#44` | **closed (Phase C shipped)** |
 | Author identity verification | C | `#44` | **closed via expectedAuthorPubkey pinning** |
-| WebAuthn / passkey unlock (replaces passphrase typing) | B | `#43` | open |
-| Multi-recipient sharing (encrypt to colleague's pubkey) | D | `#45` | open |
+| WebAuthn / passkey unlock (replaces passphrase typing) | B | `#43` | **closed (Phase B shipped — browser-only)** |
+| Multi-recipient sharing (encrypt to colleague's pubkey) | D | `#45` | **closed (Phase D shipped)** |
 | File-permission check on `--password-file` | A+ | — | open |
 | Idle-timeout auto-forget passphrase | A+ | — | open |
+
+## Phase D — Multi-recipient X25519 sharing
+
+Send the same encrypted block to multiple readers, each unlockable
+with their own private key. No shared passphrase, no key distribution
+ceremony — age's X25519 mode is non-interactive.
+
+```bash
+# Each user mints their own keypair (.priv stays with them, .pub is
+# shared with the file's author).
+workbook keygen --type x25519 --out keys/alice
+workbook keygen --type x25519 --out keys/bob
+
+# Encrypt for both — produces ONE envelope with two recipient stanzas.
+workbook encrypt --in data.csv --out enc.html \
+  --id orders --mime text/csv \
+  --recipient-file keys/alice.pub \
+  --recipient-file keys/bob.pub
+```
+
+Resolver wiring:
+
+```ts
+const resolver = createWorkbookDataResolver({
+  // Each user supplies THEIR identity. typage tries them in order and
+  // the matching one unwraps the file key.
+  x25519Identities: ["AGE-SECRET-KEY-1..."],
+
+  // Optional fallback if the file is recipient-only and the user
+  // doesn't have a matching identity.
+  requestPassword: async () => promptUI(),
+});
+```
+
+Combining `--password` + `--recipient` is intentionally rejected by
+the CLI under typage 0.2 (typage doesn't expose `ScryptRecipient`
+publicly). age the format supports it; lifting this requires
+upgrading typage past 0.2 or patching it to re-export the class.
+
+Verified by `security-test.mjs` (Phase D section, 16 tests):
+
+- Three recipients each independently decrypt the same envelope
+- Stranger identity rejected
+- Passing a public recipient (`age1...`) where an identity
+  (`AGE-SECRET-KEY-1...`) was expected is rejected
+- Byte-flip in body still rejected with X25519 unlock
+- Empty-recipient encrypt rejected
+- Nonce uniqueness preserved across multi-recipient files
+- Phase E parity: Rust `ageDecryptWithIdentitiesToHandle` decrypts
+  with the same isolation property as the passphrase path
+
+## Phase B — WebAuthn-PRF unlock (Touch ID / Windows Hello / security key)
+
+Browser-only. Uses age's PRF stanza via typage's `webauthn` module.
+The user authenticates with a passkey (or hardware security key); the
+authenticator's PRF extension produces a deterministic 32-byte secret
+that wraps the file key. No passphrase typed, ever.
+
+```ts
+// One-time setup — register a credential and persist the returned
+// identity string (it's `AGE-PLUGIN-FIDO2PRF-1...`, NOT secret; it
+// only identifies which credential to summon).
+const identity = await createWebAuthnCredential({
+  keyName: "Workbook unlock — laptop",
+  rpId: "your-app.example.com",
+});
+localStorage.setItem("wb-pad-identity", identity);
+
+// At encrypt time:
+const recipient = await buildWebAuthnRecipient({ identity });
+const cipher = await encryptToRecipients(plaintext, {
+  objectRecipients: [recipient],
+});
+
+// At decrypt time:
+const unlocker = await buildWebAuthnIdentity({ identity });
+const resolver = createWorkbookDataResolver({
+  webauthnIdentity: unlocker,
+});
+```
+
+Properties (from age's PRF design):
+
+- The PRF output never crosses the JS↔authenticator boundary in
+  re-derivable form. JS only sees the wrapped file key per stanza.
+- No passphrase to phish. An attacker who captures a keylogger
+  doesn't get the PRF output.
+- User presence required on every unlock (Touch ID / PIN /
+  security-key tap), unless the platform UI caches it briefly.
+
+Caveats:
+
+- Requires a PRF-supporting authenticator. Most modern platform
+  authenticators (Touch ID on macOS 14+, Windows Hello on
+  Windows 11+, recent Android) and most FIDO2 security keys.
+- The identity string MUST be persisted (e.g. localStorage). Losing
+  it = losing access (can't enumerate which credential to call PRF
+  on without it for `security-key` type credentials).
+- WebAuthn requires user activation — wire a button click before
+  calling unlock, not on page load.
+- Under `wasmIsolation`, Phase B currently throws: the Rust path
+  doesn't have a WebAuthn unwrap. Use plain JS-heap mode for
+  WebAuthn-encrypted blocks until the Rust side gets a PRF stanza
+  parser. (Tracked as a follow-up; see `crypto.rs`.)
+
+Verified by `security-test.mjs` (Phase B section, 5 tests):
+
+- `createWebAuthnCredential` errors clearly in Node (no
+  `navigator.credentials`)
+- `buildWebAuthnIdentity` / `buildWebAuthnRecipient` construct
+  objects matching typage's Identity / Recipient contracts (so they
+  compose with `encryptToRecipients` and the resolver)
+
+The full encrypt → unlock round-trip is a browser-test concern; the
+harness here proves the Node-side seams hold.
 
 ## Verifying the property claims
 
 ```sh
 # From the workbook root:
 node --experimental-strip-types security-test.mjs
-# Expected: 41 pass / 0 fail
-# (29 Phase A+C + 12 Phase E; the Phase E section is auto-skipped if
-# packages/runtime-wasm/pkg is not built — run wasm-pack first to exercise it.)
+# Expected: 62 pass / 0 fail
+# (29 Phase A+C + 12 Phase E + 16 Phase D + 5 Phase B; the Phase E +
+# D-Rust sections are auto-skipped if packages/runtime-wasm/pkg is
+# not built — run wasm-pack first to exercise them.)
 ```
 
 The harness exercises every adversarial property documented above.

@@ -1,20 +1,30 @@
-// `workbook keygen` — generate an Ed25519 author keypair for signing
-// encrypted <wb-data> blocks. Outputs:
+// `workbook keygen` — generate a keypair. Two key types supported:
 //
-//   <out>.priv  — base64 of the 32-byte secret key (KEEP THIS SECRET)
-//   <out>.pub   — base64 of the 32-byte public key (publish this)
+//   --type signing  (default) — Ed25519 author keypair for signing
+//                                encrypted <wb-data> blocks (Phase C).
+//   --type x25519              — age X25519 keypair for multi-recipient
+//                                encryption (Phase D). Use the .pub
+//                                (an `age1...` recipient) with
+//                                `workbook encrypt --recipient ...`;
+//                                hand the .priv (an
+//                                `AGE-SECRET-KEY-1...` identity) to
+//                                each user who should be able to
+//                                decrypt.
 //
 // Usage:
-//   workbook keygen --out keys/myauthor
+//   workbook keygen --out keys/myauthor                # Ed25519 (signing)
+//   workbook keygen --type x25519 --out keys/alice     # age recipient
 //
-// The .priv file is written 0600 (owner read/write only). Distribute
-// the .pub via your normal channels (Git, signature footer, business
-// card with QR — whatever). Hosts of the workbook pin the .pub
-// content via createWorkbookDataResolver({ expectedAuthorPubkey }).
+// Output files (both types):
+//   <out>.priv  — secret material, written 0600 (owner-only)
+//   <out>.pub   — public material, safe to publish
 //
-// Loss-of-priv = loss of ability to sign new encrypted blocks. Old
-// signed blocks remain verifiable. To rotate, generate a new keypair
-// and resign anything you still want to ship.
+// Loss of .priv:
+//   - signing: lose the ability to sign new encrypted blocks; old
+//     signed blocks remain verifiable.
+//   - x25519: lose the ability to decrypt files addressed to this
+//     identity. Re-encrypt anything you still need access to with a
+//     fresh recipient.
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -23,8 +33,35 @@ export async function runKeygen(opts) {
   if (!opts.out) {
     throw new Error("missing --out <basename>");
   }
-  const { generateKeypair } = await import("@work.books/runtime/signature");
-  const { privateKey, publicKey } = generateKeypair();
+  const type = opts.type ?? "signing";
+  if (type !== "signing" && type !== "x25519") {
+    throw new Error(
+      `--type '${type}' not recognized. Use 'signing' (Ed25519) or 'x25519' (age recipient).`,
+    );
+  }
+
+  let privateKey;
+  let publicKey;
+  let privNote;
+  let pubNote;
+
+  if (type === "signing") {
+    const { generateKeypair } = await import("@work.books/runtime/signature");
+    const kp = generateKeypair();
+    privateKey = kp.privateKey;
+    publicKey = kp.publicKey;
+    privNote = "Ed25519 secret — passed via --sign-key/--sign-key-file";
+    pubNote = "Ed25519 public — pinned via expectedAuthorPubkey";
+  } else {
+    const { generateX25519Identity } = await import(
+      "@work.books/runtime/encryption"
+    );
+    const kp = await generateX25519Identity();
+    privateKey = kp.identity;
+    publicKey = kp.recipient;
+    privNote = "AGE-SECRET-KEY-1... — passed to resolver via x25519Identities";
+    pubNote = "age1... — passed to encrypt via --recipient";
+  }
 
   const privPath = `${opts.out}.priv`;
   const pubPath = `${opts.out}.pub`;
@@ -39,10 +76,10 @@ export async function runKeygen(opts) {
   await fs.chmod(pubPath, 0o644);
 
   process.stdout.write(
-    `workbook keygen: wrote\n` +
-      `  ${privPath}  (0600 — keep this secret)\n` +
-      `  ${pubPath}   (0644 — publish or pin via expectedAuthorPubkey)\n` +
+    `workbook keygen (${type}): wrote\n` +
+      `  ${privPath}  (0600 — ${privNote})\n` +
+      `  ${pubPath}   (0644 — ${pubNote})\n` +
       `\n` +
-      `pubkey: ${publicKey}\n`,
+      `${type === "signing" ? "pubkey" : "recipient"}: ${publicKey}\n`,
   );
 }

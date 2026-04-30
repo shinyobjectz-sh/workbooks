@@ -48,7 +48,8 @@
 //! a long session of decrypt+dispose cycles.
 
 use age::secrecy::SecretString;
-use age::{Decryptor, Identity, scrypt};
+use age::{Decryptor, Identity, scrypt, x25519};
+use std::str::FromStr;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
@@ -161,6 +162,57 @@ pub fn age_decrypt_to_bytes(
 ) -> Result<Vec<u8>, JsValue> {
     decrypt_passphrase_inner(&ciphertext, &passphrase)
         .map_err(|e| JsValue::from_str(&e))
+}
+
+/// Phase D — decrypt with one or more X25519 identities. Each
+/// identity is an `AGE-SECRET-KEY-1...` string (the form produced by
+/// `workbook keygen --type x25519`). Identities are tried in order;
+/// the first that unwraps the file key wins. If none match, returns
+/// an error — the file isn't addressed to any of these identities.
+///
+/// Plaintext stays in linear memory; JS receives only the slot id,
+/// matching `ageDecryptToHandle`'s isolation property.
+fn decrypt_identity_inner(
+    ciphertext: &[u8],
+    identity_strs: &[String],
+) -> Result<Vec<u8>, String> {
+    if identity_strs.is_empty() {
+        return Err("at least one identity is required".to_string());
+    }
+    // Parse all identity strings up-front so a malformed one fails
+    // before we even open the decryptor.
+    let parsed: Vec<x25519::Identity> = identity_strs
+        .iter()
+        .map(|s| {
+            x25519::Identity::from_str(s)
+                .map_err(|e| format!("malformed X25519 identity: {e}"))
+        })
+        .collect::<Result<_, _>>()?;
+    let decryptor = Decryptor::new(Cursor::new(ciphertext))
+        .map_err(|e| format!("age decrypt init: {e}"))?;
+    let identities: Vec<&dyn Identity> =
+        parsed.iter().map(|id| id as &dyn Identity).collect();
+    let mut reader = decryptor
+        .decrypt(identities.into_iter())
+        .map_err(|e| format!("age decrypt (x25519): {e}"))?;
+    let mut plaintext = Vec::new();
+    reader
+        .read_to_end(&mut plaintext)
+        .map_err(|e| format!("age decrypt read: {e}"))?;
+    Ok(plaintext)
+}
+
+#[wasm_bindgen(js_name = ageDecryptWithIdentitiesToHandle)]
+pub fn age_decrypt_with_identities_to_handle(
+    ciphertext: Vec<u8>,
+    identities: JsValue,
+) -> Result<u32, JsValue> {
+    let ids: Vec<String> = serde_wasm_bindgen::from_value(identities)
+        .map_err(|e| JsValue::from_str(&format!("identities arg: {e}")))?;
+    let plaintext = decrypt_identity_inner(&ciphertext, &ids)
+        .map_err(|e| JsValue::from_str(&e))?;
+    let id = registry().lock().unwrap().insert(plaintext);
+    Ok(id)
 }
 
 // ─── Handle introspection + lifecycle ─────────────────────────────
