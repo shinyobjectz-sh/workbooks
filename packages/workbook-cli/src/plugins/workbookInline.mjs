@@ -29,6 +29,25 @@ import {
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ICON_PATH = path.resolve(HERE, "..", "..", "templates", "default-icon.svg");
+const SAVE_HANDLER_PATH = path.resolve(HERE, "..", "runtime-inject", "saveHandler.mjs");
+
+// Cache the save-handler source after first read — it doesn't change
+// during a build run.
+let _saveHandlerSrc = null;
+async function readSaveHandler() {
+  if (_saveHandlerSrc !== null) return _saveHandlerSrc;
+  _saveHandlerSrc = await fs.readFile(SAVE_HANDLER_PATH, "utf8");
+  return _saveHandlerSrc;
+}
+
+// Sentinels for the save-handler block — kept separate from the
+// runtime sentinels so we can update either independently on re-runs.
+function makeSaveSentinels() {
+  return {
+    BEGIN: "<!-- BEGIN workbook-save-handler -->",
+    END: "<!-- END workbook-save-handler -->",
+  };
+}
 
 // ----------------------------------------------------------------------
 // Head-injection helpers — closes core-bii.
@@ -355,12 +374,34 @@ export default function workbookInline({ config, runtimeOverride } = {}) {
 
       const assets = await readRuntimeAssets(runtime);
       const { BEGIN, END } = makeSentinels();
-      const block = [
+
+      // Save handler script — runs in <head> as the page parses. The
+      // keydown listener attaches synchronously; rehydrate runs on
+      // DOMContentLoaded inside the script. Disable per-workbook via
+      // config.save.enabled = false.
+      const saveEnabled = config.save?.enabled !== false;
+      const saveHandlerSrc = saveEnabled ? await readSaveHandler() : null;
+      const { BEGIN: SAVE_BEGIN, END: SAVE_END } = makeSaveSentinels();
+      const saveBlock = saveHandlerSrc
+        ? `${SAVE_BEGIN}\n<script>${escapeForScript(saveHandlerSrc)}</script>\n${SAVE_END}`
+        : "";
+
+      // Compose the full head-injection block: save handler first
+      // (so Cmd+S works as soon as the page parses, even if the
+      // runtime fails to boot), then the portable assets. Both go
+      // through injectIntoHead which anchors on SLOT_PORTABLE — a
+      // unique sentinel that lives outside any user JS, so the
+      // "literal </body> in DOMPurify source" footgun (which the
+      // first cut of save-handler injection tripped on) cannot
+      // happen here.
+      const portableBlock = [
         makeAssetTag("wasm-b64", "text/plain", assets.wasmB64),
         makeAssetTag("bindgen-src", "text/plain", escapeForScript(assets.bindgenJs)),
         makeAssetTag("runtime-bundle-src", "text/plain", escapeForScript(assets.bundleSrc)),
       ].join("\n");
-      const wrapped = `${BEGIN}\n${block}\n${END}`;
+      const wrapped = saveBlock
+        ? `${saveBlock}\n${BEGIN}\n${portableBlock}\n${END}`
+        : `${BEGIN}\n${portableBlock}\n${END}`;
 
       for (const file of htmlFiles) {
         let src = await fs.readFile(file, "utf8");

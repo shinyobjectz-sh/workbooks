@@ -137,6 +137,25 @@ export async function loadConfig(projectDir) {
     };
   }
 
+  // Save-on-Cmd+S — author-controlled state envelope, on by default.
+  // Authors override the state via window.serializeWorkbookState /
+  // window.rehydrateWorkbookState in their main.js. Disable entirely
+  // by setting save.enabled = false (e.g. a chess SPA that has no
+  // meaningful state to persist beyond the move list, which it
+  // already syncs over WebRTC).
+  let save = { enabled: true };
+  if (cfg.save !== undefined) {
+    if (cfg.save === false || cfg.save === null) {
+      save = { enabled: false };
+    } else if (typeof cfg.save === "object" && !Array.isArray(cfg.save)) {
+      save = { enabled: cfg.save.enabled !== false };
+    } else {
+      throw new Error(
+        `workbook.config: 'save' must be a boolean or { enabled?: boolean }`,
+      );
+    }
+  }
+
   return {
     root,
     configPath,
@@ -153,5 +172,6 @@ export async function loadConfig(projectDir) {
     // Inline assets unless explicitly disabled; --no-wasm flag flips this.
     inlineRuntime: cfg.inlineRuntime ?? true,
     encrypt,                    // null when not configured
+    save,                       // { enabled: true } default
   };
 }
