@@ -75,3 +75,71 @@ export function useExecutor(): () => ReactiveExecutor | null {
   const ctx = requireAuthoringContext("useExecutor");
   return () => ctx.getExecutor();
 }
+
+/**
+ * Subscribe to a Loro CRDT doc registered via <Doc id="..."> (or
+ * authored as a raw <wb-doc>).
+ *
+ * Returns a getter that resolves to the Loro doc handle once the
+ * runtime has registered it. The handle exposes Loro's full API for
+ * mutations; changes round-trip through Cmd+S into the .workbook.html
+ * file on save. No IDB, no localStorage — the file is the database.
+ *
+ *   const composition = useDoc("composition");
+ *   $effect(() => {
+ *     const doc = composition();
+ *     if (doc) doc.getText("body").insert(0, "hello");
+ *   });
+ *
+ * Returns null while the runtime is booting; consumers should null-
+ * check on every read. Pair with useRuntime() to await ready.
+ */
+export function useDoc(id: string): () => unknown {
+  requireAuthoringContext("useDoc");
+  return () => {
+    if (typeof window === "undefined") return null;
+    type RuntimeApi = { getDocHandle?: (id: string) => unknown };
+    const rt = (window as Window & { __wbRuntime?: RuntimeApi }).__wbRuntime;
+    if (!rt || typeof rt.getDocHandle !== "function") return null;
+    try { return rt.getDocHandle(id); } catch { return null; }
+  };
+}
+
+/**
+ * Read + append to a registered <wb-memory> stream. Returns a getter
+ * that resolves to a small interface:
+ *
+ *   const memory = useMemory("chat-thread");
+ *   const m = memory();
+ *   if (m) {
+ *     await m.append([{ ts: Date.now(), role: "user", text: "hi" }]);
+ *     const bytes = await m.export();   // current Arrow IPC bytes
+ *   }
+ *
+ * Save handler captures current state on Cmd+S; nothing IDB-shaped.
+ */
+export interface MemoryHandle {
+  /** Append rows to the memory stream. The runtime serializes them
+   *  via Arrow IPC and updates the in-memory state. */
+  append(rows: Record<string, unknown>[]): Promise<void>;
+  /** Export current state as Arrow IPC bytes. Mostly useful for
+   *  custom serialization; the save handler does this automatically. */
+  export(): Promise<Uint8Array>;
+}
+
+export function useMemory(id: string): () => MemoryHandle | null {
+  requireAuthoringContext("useMemory");
+  return () => {
+    if (typeof window === "undefined") return null;
+    type RuntimeApi = {
+      appendMemory?: (id: string, rows: Record<string, unknown>[]) => Promise<void>;
+      exportMemory?: (id: string) => Promise<Uint8Array>;
+    };
+    const rt = (window as Window & { __wbRuntime?: RuntimeApi }).__wbRuntime;
+    if (!rt || typeof rt.exportMemory !== "function") return null;
+    return {
+      append: (rows) => rt.appendMemory?.(id, rows) ?? Promise.resolve(),
+      export: () => rt.exportMemory!(id),
+    };
+  };
+}

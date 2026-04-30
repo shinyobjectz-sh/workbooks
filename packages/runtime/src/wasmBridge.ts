@@ -271,6 +271,17 @@ export interface RuntimeClient {
   exportDoc?(id: string): Promise<Uint8Array>;
   /** Read the current JSON projection of a doc. */
   readDoc?(id: string): Promise<unknown>;
+  /**
+   * Retrieve a registered doc's live handle. The handle exposes Loro's
+   * full mutation API; useful for the SDK's useDoc() hook so authors
+   * can write `doc.getText("body").insert(...)` style code without
+   * round-tripping every change through docMutate.
+   *
+   * Returns undefined if no doc with `id` is registered. Callers should
+   * null-check; the runtime registers docs at mount time, so this is
+   * available once the workbook has booted.
+   */
+  getDocHandle?(id: string): import("./loroSidecar").LoroDocHandle | undefined;
 }
 
 export interface RuntimeClientOptions {
@@ -597,6 +608,14 @@ export function createRuntimeClient(opts: RuntimeClientOptions): RuntimeClient {
       const handle = docHandles.get(id);
       if (!handle) throw new Error(`doc id not registered: ${id}`);
       return handle.toJSON();
+    },
+
+    getDocHandle(id) {
+      // Synchronous handle lookup for the SDK's useDoc() hook. Authors
+      // call Loro's mutation API directly on the returned handle;
+      // changes round-trip back into the .workbook.html file via the
+      // save handler's exportDoc() call on Cmd+S.
+      return docHandles.get(id);
     },
   };
 }

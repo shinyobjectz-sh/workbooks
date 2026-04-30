@@ -22,12 +22,20 @@ export {
   Cell,
   Input,
   Output,
+  Doc,
+  Memory,
   useCell,
   useDAG,
   useRuntime,
   useExecutor,
+  useDoc,
+  useMemory,
 } from "./authoring";
-export type { AuthoringContext, CellStatesMap } from "./authoring";
+export type {
+  AuthoringContext,
+  CellStatesMap,
+  MemoryHandle,
+} from "./authoring";
 
 // Markdown renderer — small CommonMark-ish; suitable for chat / agent
 // workbooks rendering assistant output. Returns trusted HTML.

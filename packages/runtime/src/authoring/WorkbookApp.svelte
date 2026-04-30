@@ -191,6 +191,17 @@
       booted = true;
       resolveReady();
 
+      // Expose the runtime client globally so the cli's save handler
+      // (workbook-cli/src/runtime-inject/saveHandler.mjs) can call
+      // exportDoc/exportMemory on Cmd+S, refreshing every <wb-doc>
+      // and <wb-memory> element with current state before serializing
+      // the file. This is what makes "the file IS the database" work
+      // — Loro CRDT mutations and Arrow-memory appends round-trip
+      // back into the .workbook.html on save.
+      if (typeof window !== "undefined") {
+        (window as Window & { __wbRuntime?: unknown }).__wbRuntime = client;
+      }
+
       await exec.runAll();
     } catch (e) {
       error = e instanceof Error ? e : new Error(String(e));

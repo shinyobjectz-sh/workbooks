@@ -1002,6 +1002,16 @@ export async function mountHtmlWorkbook(opts: MountOptions): Promise<{
     bindAgentElement(agentEl as HTMLElement, ctx, spec);
   }
 
+  // Expose the runtime client globally so the cli's save handler
+  // (workbook-cli/src/runtime-inject/saveHandler.mjs) can call
+  // exportDoc/exportMemory on Cmd+S, refreshing every <wb-doc> and
+  // <wb-memory> element with current state before serializing the
+  // file. Same hook that the Svelte SDK's <WorkbookApp> sets, so
+  // both authoring paths get file-roundtrip identically.
+  if (typeof window !== "undefined") {
+    (window as Window & { __wbRuntime?: unknown }).__wbRuntime = client;
+  }
+
   await executor.runAll();
   return { executor, ctx, spec };
 }

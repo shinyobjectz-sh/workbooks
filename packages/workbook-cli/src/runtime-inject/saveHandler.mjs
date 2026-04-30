@@ -131,6 +131,79 @@
     tryRehydrate();
   }
 
+  // -------- file-as-database: refresh persistent elements ----------
+  //
+  // Before snapshotting the DOM for save, walk every <wb-doc> and
+  // <wb-memory> element in the live document and refresh its content
+  // with the runtime's current bytes. Without this step, the saved
+  // file would contain the INITIAL state of these elements (the bytes
+  // they were authored with), not whatever the user mutated during
+  // the session. The runtime exposes its client at `window.__wbRuntime`
+  // (see htmlBindings.ts and authoring/WorkbookApp.svelte for the
+  // installer hooks). This is what makes "the file IS the database"
+  // actually work — Loro CRDT changes and Arrow-memory appends round-
+  // trip back into the .workbook.html on every Cmd+S.
+
+  async function bytesToBase64Async(bytes) {
+    let binary = "";
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode.apply(
+        null,
+        bytes.subarray(i, Math.min(i + chunk, bytes.length)),
+      );
+    }
+    return btoa(binary);
+  }
+
+  async function sha256Hex(bytes) {
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return [...new Uint8Array(digest)]
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  }
+
+  async function refreshPersistentElements() {
+    const rt = window.__wbRuntime;
+    if (!rt) return; // no runtime mounted (e.g. encrypted workbook pre-unlock)
+
+    const tasks = [];
+    if (typeof rt.exportDoc === "function") {
+      for (const el of document.querySelectorAll("wb-doc")) {
+        const id = el.getAttribute("id");
+        if (id) tasks.push(refreshElement(el, id, rt.exportDoc.bind(rt)));
+      }
+    }
+    if (typeof rt.exportMemory === "function") {
+      for (const el of document.querySelectorAll("wb-memory")) {
+        const id = el.getAttribute("id");
+        if (id) tasks.push(refreshElement(el, id, rt.exportMemory.bind(rt)));
+      }
+    }
+    await Promise.allSettled(tasks);
+  }
+
+  async function refreshElement(el, id, exporter) {
+    try {
+      const bytes = await exporter(id);
+      if (!(bytes instanceof Uint8Array) || bytes.length === 0) return;
+      const [b64, sha] = await Promise.all([
+        bytesToBase64Async(bytes),
+        sha256Hex(bytes),
+      ]);
+      el.textContent = b64;
+      el.setAttribute("encoding", "base64");
+      el.setAttribute("sha256", sha);
+      el.setAttribute("bytes", String(bytes.length));
+      // Drop external src — content is now inline. Keeps the saved
+      // file fully self-contained even if the original authored form
+      // was a remote fetch.
+      el.removeAttribute("src");
+    } catch (e) {
+      console.warn(`[workbook] save: failed to refresh <${el.tagName.toLowerCase()} id="${id}">:`, e);
+    }
+  }
+
   // -------- save flow --------
 
   function buildSavedHtml() {
@@ -177,6 +250,11 @@
   }
 
   async function save() {
+    // Refresh <wb-doc> + <wb-memory> elements with current runtime
+    // state BEFORE snapshotting the HTML. This is the file-roundtrip
+    // glue: in-memory mutations land in the saved file.
+    await refreshPersistentElements();
+
     const html = buildSavedHtml();
     const sizeKb = Math.max(1, Math.round(html.length / 1024));
 
