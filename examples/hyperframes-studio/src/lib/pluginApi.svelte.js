@@ -13,6 +13,16 @@
 // composition / runtime.
 
 import { registerExtraTool, unregisterExtraTool } from "./agent.svelte.js";
+// Lazy-resolved to dodge a module-init cycle: composition.svelte.js
+// imports compositionDecorators from this file, and we only need
+// the composition store at plugin-call time, not module-load.
+let _compositionStore = null;
+async function getComposition() {
+  if (!_compositionStore) {
+    _compositionStore = (await import("./composition.svelte.js")).composition;
+  }
+  return _compositionStore;
+}
 
 /**
  * @typedef {Object} PluginApi  the wb.* surface
@@ -225,18 +235,26 @@ export function createPluginApi(pluginId, store) {
 
   // ── wb.composition ─────────────────────────────────────────────
   api.composition = {
-    /** Read the current composition HTML. */
-    read() {
-      // TODO P2: import composition store; return current html.
-      return "";
+    /** Read the current composition HTML (async — store is loaded
+     *  lazily to avoid a module-init cycle). */
+    async read() {
+      const store = await getComposition();
+      return store.html;
     },
-    /** Subscribe to composition changes. */
+    /** Subscribe to composition changes. v1 stub — plugins that need
+     *  this should run inside a Svelte component and use $effect on
+     *  composition.html directly. Tracked as future work. */
     subscribe(_fn) {
-      // TODO P2.
-      console.warn("wb.composition.subscribe: stub (P2)");
+      console.warn(
+        "wb.composition.subscribe: not yet implemented for outside-Svelte plugins. " +
+        "If you're inside a Svelte component, use $effect on composition.html.",
+      );
+      return () => {};
     },
     /** Register a decorator that transforms composition HTML before
-     *  the iframe renders it. Decorators run in registration order. */
+     *  the iframe renders it. Decorators run in priority order
+     *  (lowest first). composition.svelte.js's buildSrcdoc reads
+     *  this list. */
     addRenderDecorator({ priority, transform }) {
       if (typeof transform !== "function") {
         throw new Error("wb.composition.addRenderDecorator: transform is required");

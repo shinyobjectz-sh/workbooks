@@ -4,6 +4,7 @@
 // the Timeline parses its [data-start] elements into clips.
 
 import { INITIAL_COMPOSITION, IFRAME_RUNTIME, IFRAME_RUNTIME_AUTOPLAY } from "./initial.js";
+import { compositionDecorators } from "./pluginApi.svelte.js";
 import { assets } from "./assets.svelte.js";
 import {
   bootstrapLoro,
@@ -226,9 +227,24 @@ class CompositionStore {
    * workbook CLI's portable-asset injector pattern-matches the first
    * </head> in the built HTML, and a literal one inside a JS template
    * literal would get the 17 MB wasm bundle injected into our srcdoc.
-   * Browsers parse a <body>-only srcdoc fine. Tracked as core-bii. */
+   * Browsers parse a <body>-only srcdoc fine. Tracked as core-bii.
+   *
+   * Plugin composition decorators (registered via wb.composition.
+   * addRenderDecorator) run here in priority order. Each decorator
+   * gets a chance to transform the body HTML before the runtime
+   * script is appended. Decorators that throw are skipped with a
+   * console warn — a buggy plugin shouldn't break the player. */
   buildSrcdoc() {
-    return `<!DOCTYPE html><html><body>${this.html}\n${IFRAME_RUNTIME}</body></html>`;
+    let body = this.html;
+    for (const dec of compositionDecorators) {
+      try {
+        const r = dec.transform(body);
+        if (typeof r === "string") body = r;
+      } catch (e) {
+        console.warn(`composition decorator from ${dec.pluginId} threw:`, e);
+      }
+    }
+    return `<!DOCTYPE html><html><body>${body}\n${IFRAME_RUNTIME}</body></html>`;
   }
 
   /** Replace the entire composition; the player remounts.
