@@ -304,6 +304,95 @@ class CompositionStore {
     return true;
   }
 
+  /** Remove a clip from the composition by element id. Walks the
+   *  HTML, finds the matching element (any clip-shaped tag — img /
+   *  video / audio / div / etc.), strips it. Returns true if the
+   *  clip was found + removed.
+   *
+   *  Persistence + revision bump are handled by _persist; downstream
+   *  ($effect on composition.html) re-renders the iframe and the
+   *  timeline picks up the change via clipsFromHtml.
+   */
+  removeClipById(id) {
+    if (!id || typeof id !== "string") return false;
+    // Match a self-closing or paired element with this exact id.
+    // Authored clips may use any tag; we look for `id="<id>"` then
+    // walk back to the opening `<` and forward to the matching close.
+    const idAttr = new RegExp(`\\bid="${escapeRe(id)}"`);
+    const openMatch = idAttr.exec(this.html);
+    if (!openMatch) return false;
+
+    // Walk back to the opening `<`.
+    let openStart = openMatch.index;
+    while (openStart > 0 && this.html[openStart] !== "<") openStart--;
+    if (this.html[openStart] !== "<") return false;
+
+    // Find the tag name to determine close shape.
+    const tagNameMatch = /^<\s*([a-zA-Z][a-zA-Z0-9-]*)/.exec(this.html.slice(openStart));
+    if (!tagNameMatch) return false;
+    const tagName = tagNameMatch[1].toLowerCase();
+
+    // Locate the end of the opening `<...>` tag (skip past quoted attrs).
+    let cursor = openStart + 1;
+    let inQuote = null;
+    while (cursor < this.html.length) {
+      const ch = this.html[cursor];
+      if (inQuote) {
+        if (ch === inQuote) inQuote = null;
+      } else {
+        if (ch === '"' || ch === "'") inQuote = ch;
+        else if (ch === ">") break;
+      }
+      cursor++;
+    }
+    if (cursor >= this.html.length) return false;
+    const openTagEnd = cursor + 1;
+
+    // Self-closing? <img />, <br/>, etc., or void elements.
+    const VOID_TAGS = new Set(["img", "br", "hr", "input", "meta", "link"]);
+    const isSelfClosing = this.html[cursor - 1] === "/" || VOID_TAGS.has(tagName);
+
+    let removeStart = openStart;
+    let removeEnd;
+    if (isSelfClosing) {
+      removeEnd = openTagEnd;
+    } else {
+      // Find matching close tag, accounting for nested tags of the
+      // same name. Most clips don't nest themselves, but the walker
+      // is correct for the general case.
+      const openRe = new RegExp(`<\\s*${tagName}\\b`, "gi");
+      const closeRe = new RegExp(`</\\s*${tagName}\\s*>`, "gi");
+      let depth = 1;
+      let walker = openTagEnd;
+      while (walker < this.html.length && depth > 0) {
+        openRe.lastIndex = walker;
+        closeRe.lastIndex = walker;
+        const nextOpen = openRe.exec(this.html);
+        const nextClose = closeRe.exec(this.html);
+        if (!nextClose) break;
+        if (nextOpen && nextOpen.index < nextClose.index) {
+          depth++;
+          walker = nextOpen.index + nextOpen[0].length;
+        } else {
+          depth--;
+          walker = nextClose.index + nextClose[0].length;
+          if (depth === 0) {
+            removeEnd = walker;
+            break;
+          }
+        }
+      }
+      if (removeEnd === undefined) return false;
+    }
+
+    // Eat any leading newline so the surgery doesn't leave a blank line.
+    if (this.html[removeStart - 1] === "\n") removeStart--;
+    this.html = this.html.slice(0, removeStart) + this.html.slice(removeEnd);
+    this.revision += 1;
+    this._persist();
+    return true;
+  }
+
   /** Append a media clip (image/video/audio) at the given start +
    *  track. src is typically a data: URL produced from a dropped
    *  File. Returns the new clip's id. */

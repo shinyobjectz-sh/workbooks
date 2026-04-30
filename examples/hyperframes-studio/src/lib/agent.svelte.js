@@ -35,6 +35,7 @@ You have these tools:
 - get_composition: read the current HTML (data URLs redacted to placeholders)
 - set_composition: replace it (provide the FULL HTML body, not a diff)
 - patch_clip: retime / move a single clip without rewriting the whole HTML
+- delete_clip: remove a single clip by id (surgical — no full rewrite)
 - list_clips: list parsed clips with id / start / duration
 - list_assets: list user-imported media (image / video / audio / svg) with stable ids
 - add_asset_clip: insert an asset by id onto the timeline as an <img|video|audio> clip
@@ -154,6 +155,30 @@ export function buildTools() {
         return ok
           ? `patched ${patch.id}`
           : `error: clip with id=${patch.id} not found`;
+      },
+    },
+    {
+      definition: {
+        name: "delete_clip",
+        description:
+          "Remove a clip from the composition by element id. Use this " +
+          "when the user asks to drop, cut, or remove a scene/asset. " +
+          "Surgical — doesn't require rewriting the whole HTML through " +
+          "set_composition.",
+        parameters: {
+          type: "object",
+          properties: {
+            id: { type: "string", description: "Clip element id (matches list_clips output)" },
+          },
+          required: ["id"],
+        },
+      },
+      invoke: (args) => {
+        if (!args?.id) return "error: id is required";
+        const ok = composition.removeClipById(args.id);
+        return ok
+          ? `deleted ${args.id}`
+          : `error: clip with id=${args.id} not found`;
       },
     },
     {

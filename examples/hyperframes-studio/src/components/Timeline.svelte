@@ -426,6 +426,37 @@
   .studio-clip[data-role="overlay"]   { --color-studio-clip-bg: color-mix(in srgb, #fb7185 18%, transparent); --color-studio-clip-border: color-mix(in srgb, #fb7185 60%, transparent); }
   .studio-clip[data-role="b-roll"]    { --color-studio-clip-bg: color-mix(in srgb, #4ade80 18%, transparent); --color-studio-clip-border: color-mix(in srgb, #4ade80 60%, transparent); }
   .studio-clip[data-role="audio"]     { --color-studio-clip-bg: color-mix(in srgb, #facc15 18%, transparent); --color-studio-clip-border: color-mix(in srgb, #facc15 60%, transparent); }
+
+  /* Per-clip delete button — hidden until hover so the clip face
+   * stays clean at rest. Sits in the top-right corner, overlapping
+   * the trim-end handle by enough to remain clickable on small
+   * clips. Pointer events stay on the button so the parent's
+   * pan/select gesture isn't started by clicking the X. */
+  .clip-delete {
+    position: absolute;
+    top: 1px;
+    right: 1px;
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.4);
+    color: rgba(255, 255, 255, 0.85);
+    border: 0;
+    border-radius: 3px;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 100ms ease, background 100ms ease, color 100ms ease;
+    z-index: 4;
+  }
+  .studio-clip:hover .clip-delete { opacity: 1; }
+  .clip-delete:hover {
+    background: rgba(220, 38, 38, 0.85);
+    color: white;
+  }
 </style>
 
 <RangeEditorPopover
@@ -564,6 +595,23 @@
                 onpointercancel={onClipPointerUp}
               >
                 <span class="opacity-60 mr-1 pointer-events-none">{c.id}</span><span class="pointer-events-none">{c.label}</span>
+
+                <!-- Delete button — visible on hover. Stops pointer
+                     events from bubbling into the clip's pan/select
+                     handler. Confirms before deleting since the
+                     timeline doesn't have undo wired. -->
+                <button
+                  class="clip-delete"
+                  onpointerdown={(ev) => ev.stopPropagation()}
+                  onclick={(ev) => {
+                    ev.stopPropagation();
+                    if (confirm(`Delete clip ${c.id}?`)) {
+                      composition.removeClipById(c.id);
+                    }
+                  }}
+                  title="Delete clip"
+                  aria-label={`Delete clip ${c.id}`}
+                >×</button>
 
                 {#if c.caps?.canTrimStart}
                   <div
