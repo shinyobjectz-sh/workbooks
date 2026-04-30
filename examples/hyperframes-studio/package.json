@@ -9,7 +9,8 @@
   },
   "dependencies": {
     "svelte": "^5.0.0",
-    "@work.books/runtime": "workspace:*"
+    "@work.books/runtime": "workspace:*",
+    "loro-crdt": "^1.0.0"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
