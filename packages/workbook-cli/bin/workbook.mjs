@@ -23,7 +23,7 @@ async function help() {
     "  workbook explain <rule>    show rationale + fix for a check rule",
     "  workbook encrypt           emit an encrypted <wb-data> element from a file",
     "  workbook keygen            generate an Ed25519 author keypair for signing",
-    "  workbook init <name>       (todo) scaffold a new workbook project",
+    "  workbook init <name>       scaffold a new workbook project (--template=spa)",
     "",
     "Build / dev options:",
     "  --port <n>      dev server port (default 5173)",
@@ -130,8 +130,10 @@ try {
       break;
     }
     case "init": {
-      console.error("workbook init: not yet implemented");
-      process.exit(2);
+      const flags = parseFlags(argv.slice(1));
+      const { runInit } = await import(path.join(cmdRoot, "init.mjs"));
+      await runInit(flags);
+      break;
     }
     case "help":
     case "--help":
