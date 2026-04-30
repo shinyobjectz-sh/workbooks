@@ -12,6 +12,23 @@
 // rather than maintaining their own copy.
 export * from "./types";
 
+// Authoring SDK — declarative Svelte components for composing live
+// workbooks. <WorkbookApp>, <Cell>, <Input>, <Output>, plus runes-based
+// hooks (useCell, useDAG, useRuntime, useExecutor) for advanced cases.
+// Strict superset of <wb-cell> custom elements; both can coexist.
+// Phases B+ extend this with <Chart>, <Agent>, <Chat>.
+export {
+  WorkbookApp,
+  Cell,
+  Input,
+  Output,
+  useCell,
+  useDAG,
+  useRuntime,
+  useExecutor,
+} from "./authoring";
+export type { AuthoringContext, CellStatesMap } from "./authoring";
+
 // Markdown renderer — small CommonMark-ish; suitable for chat / agent
 // workbooks rendering assistant output. Returns trusted HTML.
 export { renderMarkdown, escapeHtml } from "./markdown";
@@ -69,7 +86,12 @@ export {
 // matching `proto/workbook/runtime/v1/runtime.proto > WorkbookRuntimeService`.
 export { createRuntimeClient } from "./wasmBridge";
 export type {
-  Cell,
+  // The authoring SDK introduced a `Cell` Svelte component (see
+  // ./authoring) which collides at the public-API surface with the
+  // existing `Cell` *type*. The component is the high-traffic name;
+  // the type aliases as `CellSpec`. Type-only consumers update on
+  // the next minor.
+  Cell as CellSpec,
   CellLanguage,
   CellOutput,
   Environment,
