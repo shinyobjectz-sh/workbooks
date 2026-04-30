@@ -98,18 +98,32 @@ export async function clearAll() {
   }
 }
 
-// ─── Debounced save coordinator ─────────────────────────────────
+// ─── Hybrid throttle + debounce save coordinator ────────────────
 //
 // Stores call markDirty(id, getValue) after every mutation. The
-// coordinator collects ids, debounces by SAVE_DEBOUNCE_MS, then
-// reads each pending id's current value and writes it. This avoids
-// per-keystroke writes during a typing burst.
+// coordinator collects ids and schedules a flush with two rules:
+//
+//   trailing debounce: save fires DEBOUNCE_MS after the last
+//     dirty mark — gives a typing burst time to settle so we don't
+//     write on every keystroke
+//
+//   throttle ceiling: saves never run more often than once every
+//     MIN_INTERVAL_MS — during continuous activity (long drag,
+//     stream of agent tool calls), the debounce keeps deferring;
+//     this cap forces a save once per interval anyway so we never
+//     go too long without persisting
+//
+// Tunables: 600 ms debounce + 1000 ms throttle means an idle burst
+// lands ~600 ms after the last edit, and continuous activity lands
+// roughly once per second.
 
 const SAVE_DEBOUNCE_MS = 600;
+const MIN_INTERVAL_MS = 1000;
 
 const pending = new Map();        // id → getValue function (latest wins)
 let timer = null;
 let saving = false;
+let lastSaveAt = 0;               // wall clock of most recent flush completion
 let _onStatusChange = null;       // optional UI hook
 let lastError = null;
 
@@ -154,9 +168,10 @@ async function flush() {
     }
     lastError = null;
     saving = false;
+    lastSaveAt = Date.now();
     if (pending.size > 0) {
       // More dirty marks landed during the save (or pending re-queues
-      // from above) — kick another round.
+      // from above) — kick another round, honoring the min-interval.
       schedule();
       return;
     }
@@ -164,13 +179,21 @@ async function flush() {
   } catch (e) {
     lastError = e?.message ?? String(e);
     saving = false;
+    lastSaveAt = Date.now(); // even errors count toward the throttle window
     notify("error");
   }
 }
 
 function schedule() {
+  // Wait at least DEBOUNCE_MS for the burst to settle, AND at least
+  // MIN_INTERVAL_MS since the last save completed. Whichever is
+  // longer wins — that's the throttle ceiling enforcing 1 save per
+  // MIN_INTERVAL_MS during continuous activity.
+  const sinceLastSave = Date.now() - lastSaveAt;
+  const throttleWait = Math.max(0, MIN_INTERVAL_MS - sinceLastSave);
+  const wait = Math.max(SAVE_DEBOUNCE_MS, throttleWait);
   if (timer) clearTimeout(timer);
-  timer = setTimeout(flush, SAVE_DEBOUNCE_MS);
+  timer = setTimeout(flush, wait);
 }
 
 /** Mark a logical state id as dirty. The coordinator will read

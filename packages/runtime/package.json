@@ -86,6 +86,10 @@
       "types": "./src/encryption.ts",
       "default": "./src/encryption.ts"
     },
+    "./signature": {
+      "types": "./src/signature.ts",
+      "default": "./src/signature.ts"
+    },
     "./workbookMemoryResolver": {
       "types": "./src/workbookMemoryResolver.ts",
       "default": "./src/workbookMemoryResolver.ts"
@@ -221,6 +225,8 @@
   },
   "dependencies": {
     "dompurify": "^3.2.0",
-    "fflate": "^0.8.0"
+    "fflate": "^0.8.0",
+    "@noble/ed25519": "^3",
+    "@noble/hashes": "^2"
   }
 }

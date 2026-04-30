@@ -61,35 +61,45 @@ architectural delta between Phase A ("the data is encrypted at
 rest in the file") and Phase E ("the data is encrypted at rest
 AND isolated in memory while in use").
 
-### No tamper-detection on `<wb-data>` attributes (Phase C closes)
+### Tamper-detection on `<wb-data>` attributes — **closed by Phase C**
 
-The `id`, `mime`, `compression`, and other attributes are NOT
-covered by age's auth tag. An attacker who can modify the workbook
-HTML could:
+age's auth tag protects ciphertext integrity but does NOT cover the
+wrapping `<wb-data>` element's attributes. Phase C adds an Ed25519
+signature over the canonical byte sequence:
 
-- Change `id="orders"` → `id="orders_2"`, swapping the decrypted
-  content into a different cell's `reads=` namespace
-- Change `mime="text/csv"` → `mime="application/json"`, causing
-  the consumer to misinterpret valid plaintext
-- Change `compression="gzip"` → cause a decompress failure or
-  misinterpret bytes
+```
+wbdata-sig-v1
+id=<id>
+mime=<mime>
+encryption=<encryption-tag>
+sha256=<plaintext sha256>
+<ciphertext bytes>
+```
 
-age's auth tag only protects ciphertext integrity. It does NOT
-authenticate the wrapping `<wb-data>` element's attributes.
+Tamper with any attribute (id, mime, encryption tag, sha256) OR
+any ciphertext byte → signature fails on verify, decrypt is never
+attempted. Surfaced via `pubkey="..."` and `sig="..."` attributes
+on `<wb-data>`.
 
-**Phase C** (`#44`) adds an Ed25519 signature over the encrypted
-envelope + attribute set + workbook metadata, verified before
-decrypt. Mismatch = the workbook was tampered after authoring.
+CLI: `workbook encrypt --sign-key-file authorpriv.key`. Generate
+keypairs with `workbook keygen --out keys/myauthor`.
 
-### No author-identity verification (Phase C closes)
+### Author-identity verification — **closed by Phase C** (with pinning)
 
-Phase A doesn't sign the file. A recipient can verify "this content
-was encrypted with the same passphrase" but NOT "this came from
-the author I expect". An attacker who guessed your passphrase (or
-a colleague who shares it) could re-encrypt malicious content with
-the same passphrase and substitute the file in transit.
+Without pinning: signature proves "this block hasn't been tampered
+after authoring" but NOT "the author is who you expect" — an
+attacker can substitute their own (pubkey, sig) pair for a
+different ciphertext.
 
-**Phase C** signing closes this.
+With pinning: pass `expectedAuthorPubkey` to
+`createWorkbookDataResolver`. The resolver checks the file's pubkey
+against the pinned one BEFORE verifying the signature. Mismatch =
+"this came from a different signer than expected" — even a valid
+signature is rejected.
+
+Phase C also adds `signaturePolicy: "require"` — block any
+unsigned `<wb-data encryption=...>` from resolving. Useful in
+production where every author is expected to sign.
 
 ### Passphrase strength is the user's problem
 
@@ -158,13 +168,15 @@ Out of our control but worth knowing:
 
 ## Future phases that close gaps
 
-| Gap | Phase | Bead |
-|---|---|---|
-| Plaintext in JS heap | E | `#46` |
-| Attribute tamper detection | C | `#44` |
-| Author identity verification | C | `#44` |
-| WebAuthn / passkey unlock (replaces passphrase typing) | B | `#43` |
-| Multi-recipient sharing (encrypt to colleague's pubkey) | D | `#45` |
+| Gap | Phase | Bead | Status |
+|---|---|---|---|
+| Plaintext in JS heap | E | `#46` | open |
+| Attribute tamper detection | C | `#44` | **closed (Phase C shipped)** |
+| Author identity verification | C | `#44` | **closed via expectedAuthorPubkey pinning** |
+| WebAuthn / passkey unlock (replaces passphrase typing) | B | `#43` | open |
+| Multi-recipient sharing (encrypt to colleague's pubkey) | D | `#45` | open |
+| File-permission check on `--password-file` | A+ | — | open |
+| Idle-timeout auto-forget passphrase | A+ | — | open |
 
 ## Verifying the property claims
 

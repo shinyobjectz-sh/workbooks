@@ -173,6 +173,13 @@ export interface WorkbookData {
   /** Optional encryption envelope. Applied to inline-base64 + external
    *  binary forms. The resolver requests a passphrase via callback. */
   encryption?: WorkbookDataEncryption;
+  /** Optional Ed25519 author pubkey (base64). Pairs with `sig`. */
+  pubkey?: string;
+  /** Optional Ed25519 signature (base64) over the canonical block
+   *  byte sequence. Verified before decrypt — see signature.ts.
+   *  Closes the attribute-tamper + author-identity gaps that age's
+   *  auth tag alone doesn't cover. */
+  sig?: string;
   source:
     | { kind: "inline-text"; content: string; sha256?: string }
     | { kind: "inline-base64"; base64: string; sha256: string }
@@ -534,6 +541,23 @@ export function parseWorkbookHtml(root: Element): WorkbookHtmlSpec {
     const encryption: WorkbookDataEncryption | undefined =
       encryptionAttr === "age-v1" ? "age-v1" : undefined;
 
+    // Optional Ed25519 signature over the canonical block bytes.
+    // Pairs (pubkey, sig) — both required if either present.
+    // See signature.ts for the canonical byte format.
+    const pubkeyAttr = el.getAttribute("pubkey");
+    const sigAttr = el.getAttribute("sig");
+    // Cap to plausible base64 lengths (32-byte key → 44 chars,
+    // 64-byte sig → 88 chars). Reject anything longer to stop
+    // attribute-stuffing attacks that try to exhaust parser memory.
+    const pubkey =
+      pubkeyAttr && pubkeyAttr.length <= 64 && /^[A-Za-z0-9+/=]+$/.test(pubkeyAttr)
+        ? pubkeyAttr
+        : undefined;
+    const sig =
+      sigAttr && sigAttr.length <= 128 && /^[A-Za-z0-9+/=]+$/.test(sigAttr)
+        ? sigAttr
+        : undefined;
+
     let entry: WorkbookData | null = null;
 
     if (srcAttr) {
@@ -541,7 +565,7 @@ export function parseWorkbookHtml(root: Element): WorkbookHtmlSpec {
       if (!sha256) continue;
       if (!isFetchableUrl(srcAttr)) continue;
       const bytes = parseBytesAttr(el.getAttribute("bytes"));
-      entry = { id, mime, rows, compression, encryption, source: { kind: "external", src: srcAttr, sha256, bytes } };
+      entry = { id, mime, rows, compression, encryption, pubkey, sig, source: { kind: "external", src: srcAttr, sha256, bytes } };
     } else if (encoding === "base64") {
       // Inline binary. sha256 required; cap base64 char count to bound
       // decoded payload at ~10 MB.
@@ -555,7 +579,7 @@ export function parseWorkbookHtml(root: Element): WorkbookHtmlSpec {
       const approxBytes = Math.floor((base64.length * 3) / 4);
       if (aggregateInlineBytes + approxBytes > MAX_AGGREGATE_INLINE_BYTES) continue;
       aggregateInlineBytes += approxBytes;
-      entry = { id, mime, rows, compression, encryption, source: { kind: "inline-base64", base64, sha256 } };
+      entry = { id, mime, rows, compression, encryption, pubkey, sig, source: { kind: "inline-base64", base64, sha256 } };
     } else if (TEXT_DATA_MIMES.has(mime)) {
       // Inline text. sha256 optional (editor-driven workbooks recompute
       // on save; readers verify when present).

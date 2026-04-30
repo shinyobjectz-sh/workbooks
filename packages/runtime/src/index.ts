@@ -172,6 +172,23 @@ export {
   looksLikeAgeEnvelope,
 } from "./encryption";
 
+// Ed25519 per-block signing — closes the attribute-tamper +
+// author-identity gaps age's auth tag alone doesn't cover. Used by
+// the runtime resolver (verify before decrypt) and the CLI's encrypt
+// command (sign at build time).
+export {
+  SIGNATURE_VERSION,
+  generateKeypair,
+  publicKeyFromPrivate,
+  signBlock,
+  verifyBlock,
+  isSigned,
+} from "./signature";
+export type {
+  WorkbookDataSignature,
+  SignableBlock,
+} from "./signature";
+
 // Model artifact resolver (P4.2) — content-addressed IndexedDB cache for
 // ML model weights. Cache-first fetch, SHA-256 integrity verification.
 export {

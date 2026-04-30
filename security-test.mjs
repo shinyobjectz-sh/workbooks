@@ -1,7 +1,8 @@
-// Adversarial test harness for the age-format <wb-data> encryption.
-// Probes the failure modes that matter for "send this file with
-// secrets to a colleague": wrong password, tampered ciphertext,
-// truncation, race conditions, etc. Run with:
+// Adversarial test harness for the age-format <wb-data> encryption
+// + Ed25519 signing. Probes the failure modes that matter for "send
+// this file with secrets to a colleague": wrong password, tampered
+// ciphertext, truncation, signature forgery, attribute swap, etc.
+// Run with:
 //   node --experimental-strip-types security-test.mjs
 
 import {
@@ -9,6 +10,11 @@ import {
   decryptWithPassphrase,
   looksLikeAgeEnvelope,
 } from "./packages/runtime/src/encryption.ts";
+import {
+  generateKeypair,
+  signBlock,
+  verifyBlock,
+} from "./packages/runtime/src/signature.ts";
 
 const PASSWORD = "correct-horse-battery-staple";
 const WRONG_PASSWORD = "tr0ub4dor&3";
@@ -228,6 +234,155 @@ async function main() {
     } else {
       console.log("SKIP header-substitution (couldn't locate header boundary)");
     }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Phase C: Ed25519 signature attacks
+  // ─────────────────────────────────────────────────────────────
+
+  const { privateKey, publicKey } = generateKeypair();
+  const { privateKey: attackerPriv, publicKey: attackerPub } = generateKeypair();
+  const block = {
+    id: "orders",
+    mime: "text/csv",
+    encryption: "age-v1",
+    sha256: "0".repeat(64),
+    ciphertext: cipher,
+  };
+
+  // ─── Happy path: sign + verify round-trip ───
+  {
+    const s = signBlock(block, privateKey);
+    expect(
+      "happy: signed block verifies",
+      verifyBlock(block, s) === true,
+    );
+    expect(
+      "happy: pubkey on the sig matches author",
+      s.pubkey === publicKey,
+    );
+  }
+
+  // ─── pubkey pinning rejects mismatch ───
+  {
+    const s = signBlock(block, privateKey);
+    try {
+      verifyBlock(block, s, attackerPub); // pin the WRONG pubkey
+      expect("pubkey-pinning: mismatch rejected", false, "did NOT throw");
+    } catch (e) {
+      expect("pubkey-pinning: mismatch rejected", /pubkey mismatch/.test(e?.message ?? ""));
+    }
+  }
+
+  // ─── pubkey pinning accepts match ───
+  {
+    const s = signBlock(block, privateKey);
+    expect(
+      "pubkey-pinning: match accepted",
+      verifyBlock(block, s, publicKey) === true,
+    );
+  }
+
+  // ─── id swap (the headline attribute-tamper attack) ───
+  {
+    const s = signBlock(block, privateKey);
+    const tampered = { ...block, id: "different_target_cell" };
+    try {
+      verifyBlock(tampered, s);
+      expect("id swap rejected", false, "did NOT throw");
+    } catch (e) {
+      expect("id swap rejected", /verification failed/.test(e?.message ?? ""));
+    }
+  }
+
+  // ─── mime swap ───
+  {
+    const s = signBlock(block, privateKey);
+    const tampered = { ...block, mime: "application/json" };
+    try {
+      verifyBlock(tampered, s);
+      expect("mime swap rejected", false, "did NOT throw");
+    } catch (e) {
+      expect("mime swap rejected", /verification failed/.test(e?.message ?? ""));
+    }
+  }
+
+  // ─── sha256 swap (substituting a different plaintext digest) ───
+  {
+    const s = signBlock(block, privateKey);
+    const tampered = { ...block, sha256: "f".repeat(64) };
+    try {
+      verifyBlock(tampered, s);
+      expect("sha256 swap rejected", false, "did NOT throw");
+    } catch (e) {
+      expect("sha256 swap rejected", /verification failed/.test(e?.message ?? ""));
+    }
+  }
+
+  // ─── ciphertext byte flip ───
+  {
+    const s = signBlock(block, privateKey);
+    const flipped = new Uint8Array(cipher);
+    flipped[Math.floor(flipped.length * 0.7)] ^= 0x01;
+    const tampered = { ...block, ciphertext: flipped };
+    try {
+      verifyBlock(tampered, s);
+      expect("ciphertext flip caught by signature", false, "did NOT throw");
+    } catch (e) {
+      expect("ciphertext flip caught by signature", /verification failed/.test(e?.message ?? ""));
+    }
+  }
+
+  // ─── attacker substitutes their own (pubkey, sig) for a tampered ciphertext ───
+  // This is THE attack pubkey-pinning is designed to catch. Without
+  // pinning, the attacker's signature verifies (since they signed
+  // their tampered version with their own key). With pinning, we
+  // detect that the file's pubkey isn't the one we expect.
+  {
+    const tamperedBlock = { ...block, id: "swapped_id" };
+    const attackerSig = signBlock(tamperedBlock, attackerPriv);
+    // Without pinning: signature verifies against attacker's own data.
+    expect(
+      "no pinning: attacker's signature on attacker's content verifies",
+      verifyBlock(tamperedBlock, attackerSig) === true,
+      "this is why pinning matters",
+    );
+    // With pinning: rejected because pubkey isn't the expected one.
+    try {
+      verifyBlock(tamperedBlock, attackerSig, publicKey);
+      expect("pinning: attacker substitution rejected", false, "did NOT throw");
+    } catch (e) {
+      expect("pinning: attacker substitution rejected", /pubkey mismatch/.test(e?.message ?? ""));
+    }
+  }
+
+  // ─── malformed signature inputs ───
+  {
+    const s = signBlock(block, privateKey);
+    const badPubkey = { ...s, pubkey: "AAAA" }; // way too short
+    try {
+      verifyBlock(block, badPubkey);
+      expect("malformed pubkey rejected", false, "did NOT throw");
+    } catch (e) {
+      expect("malformed pubkey rejected", /must be 32 bytes/.test(e?.message ?? ""));
+    }
+    const badSig = { ...s, sig: "AAAA" }; // way too short
+    try {
+      verifyBlock(block, badSig);
+      expect("malformed sig rejected", false, "did NOT throw");
+    } catch (e) {
+      expect("malformed sig rejected", /must be 64 bytes/.test(e?.message ?? ""));
+    }
+  }
+
+  // ─── deterministic canonicalization: same inputs, same sig (well, almost — Ed25519 is deterministic) ───
+  {
+    const s1 = signBlock(block, privateKey);
+    const s2 = signBlock(block, privateKey);
+    expect(
+      "Ed25519 deterministic: same block + same key produces same sig",
+      s1.sig === s2.sig,
+    );
   }
 
   console.log(`\n${pass} pass / ${fail} fail`);

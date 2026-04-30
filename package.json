@@ -24,6 +24,8 @@
     "typecheck": "pnpm -r --filter ./packages/* typecheck"
   },
   "devDependencies": {
+    "@noble/ed25519": "^3",
+    "@noble/hashes": "^2",
     "age-encryption": "^0.2"
   }
 }

@@ -20,6 +20,7 @@ async function help() {
     "  workbook dev [project]     start a Vite dev server with HMR",
     "  workbook build [project]   compile project into dist/<slug>.workbook.html",
     "  workbook encrypt           emit an encrypted <wb-data> element from a file",
+    "  workbook keygen            generate an Ed25519 author keypair for signing",
     "  workbook init <name>       (todo) scaffold a new workbook project",
     "",
     "Build / dev options:",
@@ -36,6 +37,12 @@ async function help() {
     "  --password <s>        passphrase (visible in `ps`; prefer --password-stdin)",
     "  --password-stdin      read passphrase from stdin (first line)",
     "  --password-file <p>   read passphrase from first line of a file",
+    "  --sign-key <b64>      Ed25519 priv key (base64) for signing — pairs with",
+    "                        the runtime's expectedAuthorPubkey for tamper-evidence",
+    "  --sign-key-file <p>   read sign key from first line of a file",
+    "",
+    "Keygen options (`workbook keygen`):",
+    "  --out <basename>      writes <basename>.priv (0600) + <basename>.pub (0644)",
     "",
     "Run dev/build inside a project containing workbook.config.js (or pass [project]).",
     "",
@@ -77,6 +84,12 @@ try {
       const flags = parseFlags(argv.slice(1));
       const { runEncrypt } = await import(path.join(cmdRoot, "encrypt.mjs"));
       await runEncrypt(flags);
+      break;
+    }
+    case "keygen": {
+      const flags = parseFlags(argv.slice(1));
+      const { runKeygen } = await import(path.join(cmdRoot, "keygen.mjs"));
+      await runKeygen(flags);
       break;
     }
     case "init": {

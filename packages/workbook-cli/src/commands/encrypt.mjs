@@ -128,9 +128,8 @@ export async function runEncrypt(opts) {
     }
   }
 
-  // Lazy-load the encryption helper from @work.books/runtime so
-  // we share one age-encryption integration. Resolves through the
-  // workspace symlink in dev, the published runtime in prod.
+  // Lazy-load the encryption + signature helpers from @work.books/runtime
+  // so we share one integration across CLI + runtime.
   const { encryptWithPassphrase, AGE_ENCRYPTION_TAG } =
     await import("@work.books/runtime/encryption");
 
@@ -139,20 +138,55 @@ export async function runEncrypt(opts) {
   const ciphertext = await encryptWithPassphrase(plaintext, password);
   const body = bytesToBase64(ciphertext);
 
+  // Optional Ed25519 signing — closes the attribute-tamper + author-
+  // identity gaps. Sign over (id, mime, encryption, sha256, ciphertext).
+  let pubkey;
+  let sig;
+  if (opts["sign-key"] || opts["sign-key-file"]) {
+    const { signBlock } = await import("@work.books/runtime/signature");
+    const privKeyB64 = await readSignKey(opts);
+    const signature = signBlock(
+      {
+        id: opts.id,
+        mime,
+        encryption: AGE_ENCRYPTION_TAG,
+        sha256: sha,
+        ciphertext,
+      },
+      privKeyB64,
+    );
+    pubkey = signature.pubkey;
+    sig = signature.sig;
+  }
+
   const attrs = [
     `id="${htmlEscapeAttr(opts.id)}"`,
     `mime="${htmlEscapeAttr(mime)}"`,
     `encryption="${AGE_ENCRYPTION_TAG}"`,
     `encoding="base64"`,
     `sha256="${sha}"`,
-  ].join(" ");
-  const element = `<wb-data ${attrs}>\n${body}\n</wb-data>\n`;
+  ];
+  if (pubkey && sig) {
+    attrs.push(`pubkey="${htmlEscapeAttr(pubkey)}"`);
+    attrs.push(`sig="${htmlEscapeAttr(sig)}"`);
+  }
+  const element = `<wb-data ${attrs.join(" ")}>\n${body}\n</wb-data>\n`;
 
   await fs.writeFile(opts.out, element, "utf8");
 
-  process.stdout.write(
+  const summary =
     `workbook encrypt: ${opts.in} (${plaintext.byteLength} B) → ` +
-      `${opts.out} (${body.length} B base64)\n` +
-      `  id=${opts.id} mime=${mime} sha256=${sha}\n`,
-  );
+    `${opts.out} (${body.length} B base64)\n` +
+    `  id=${opts.id} mime=${mime} sha256=${sha}\n` +
+    (pubkey ? `  signed by ${pubkey.slice(0, 16)}...\n` : "");
+  process.stdout.write(summary);
+}
+
+async function readSignKey(opts) {
+  if (opts["sign-key-file"]) {
+    const data = await fs.readFile(opts["sign-key-file"], "utf8");
+    return data.split(/\r?\n/, 1)[0].trim();
+  }
+  if (opts["sign-key"]) return String(opts["sign-key"]).trim();
+  throw new Error("readSignKey: no key source");
 }

@@ -356,6 +356,54 @@ impl History {
             .collect())
     }
 
+    /// Truncate the chain so HEAD becomes `target` and every commit
+    /// AFTER target (newer than it on the linear parent chain) is
+    /// dropped along with their now-orphaned root chunks. The target
+    /// must be reachable from current HEAD via parent pointers — if
+    /// not, returns an error and leaves state untouched.
+    ///
+    /// This is the destructive operation that makes cursor-based
+    /// undo/redo work: an edit while the cursor is behind HEAD calls
+    /// truncate_to(cursor) first, then appends the new edit; the
+    /// commits between cursor and old HEAD become unreachable.
+    fn truncate_to(&self, target: &Hash) -> Result<Self, String> {
+        // Walk from HEAD via parent pointers. Until we hit target,
+        // skip those chunks (they're "ahead" — to be dropped). From
+        // target onward (target + its ancestors), keep them.
+        let mut keep: std::collections::BTreeSet<Hash> = std::collections::BTreeSet::new();
+        let mut found_target = false;
+        let mut cur = Some(self.head);
+        while let Some(h) = cur {
+            if h == *target {
+                found_target = true;
+            }
+            let bytes = self
+                .chunks
+                .get(&h)
+                .ok_or_else(|| format!("commit chunk missing during truncate walk: {}", hex(&h)))?;
+            let commit = decode_commit(bytes)?;
+            if found_target {
+                keep.insert(h);
+                keep.insert(commit.root);
+            }
+            cur = commit.parent;
+        }
+        if !found_target {
+            return Err(format!(
+                "truncate_to: target {} not reachable from HEAD {}",
+                hex(target),
+                hex(&self.head)
+            ));
+        }
+        let new_chunks: BTreeMap<Hash, Vec<u8>> = self
+            .chunks
+            .iter()
+            .filter(|(h, _)| keep.contains(*h))
+            .map(|(h, b)| (*h, b.clone()))
+            .collect();
+        Ok(History { head: *target, chunks: new_chunks })
+    }
+
     fn checkout(&self, commit_hash: &Hash) -> Result<Vec<(String, Vec<u8>)>, String> {
         let bytes = self
             .chunks
@@ -533,6 +581,18 @@ pub fn prolly_log(serialized: Vec<u8>) -> Result<JsValue, JsValue> {
     let h = History::deserialize(&serialized).map_err(|e| JsValue::from_str(&e))?;
     let log = h.log().map_err(|e| JsValue::from_str(&e))?;
     serde_wasm_bindgen::to_value(&log).map_err(Into::into)
+}
+
+/// Truncate the chain to a past commit. Returns new serialized
+/// history bytes where HEAD = target_hex and every commit after
+/// target on the linear parent chain has been dropped. Errors if
+/// target isn't reachable from current HEAD.
+#[wasm_bindgen(js_name = prollyTruncateTo)]
+pub fn prolly_truncate_to(serialized: Vec<u8>, target_hex: String) -> Result<Vec<u8>, JsValue> {
+    let h = History::deserialize(&serialized).map_err(|e| JsValue::from_str(&e))?;
+    let target = parse_hex(&target_hex).map_err(|e| JsValue::from_str(&e))?;
+    let truncated = h.truncate_to(&target).map_err(|e| JsValue::from_str(&e))?;
+    Ok(truncated.serialize())
 }
 
 /// Materialize the full leaf at a past commit. Returns an array of

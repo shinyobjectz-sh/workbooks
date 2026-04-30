@@ -181,6 +181,10 @@ export interface WorkbookRuntimeWasm {
   }>;
   /** Materialize the leaf at a past commit. Returns [key, value][]. */
   prollyCheckout?: (serialized: Uint8Array, commit_hash_hex: string) => Array<[string, Uint8Array]>;
+  /** Truncate the chain so HEAD = target_hex, dropping commits after
+   *  target. Used by cursor-based undo: editing while behind HEAD
+   *  truncates first so the new commit's parent is the cursor. */
+  prollyTruncateTo?: (serialized: Uint8Array, target_hex: string) => Uint8Array;
   runChart?: (spec_json: string) => CellOutput[];
   candleSmokeTest?: () => CellOutput[];
   linfaSmokeTest?: () => CellOutput[];

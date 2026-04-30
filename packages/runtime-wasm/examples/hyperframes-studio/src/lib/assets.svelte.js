@@ -22,6 +22,7 @@
 import { recordEdit, recordDelete } from "./historyBackend.svelte.js";
 import {
   bootstrapLoro,
+  getDoc,
   readAssets,
   pushAsset,
   removeAssetById,
@@ -67,16 +68,25 @@ class AssetsStore {
   hydrated = $state(false);
 
   constructor() {
-    bootstrapLoro()
-      .then(() => {
-        const stored = readAssets();
-        if (stored.length > 0) this.items = stored;
-        this.hydrated = true;
-      })
-      .catch((e) => {
-        console.warn("assets: hydrate failed:", e?.message ?? e);
-        this.hydrated = true;
-      });
+    // Sync hydrate when main.js has already awaited bootstrap
+    // (the standard entry path). Falls back to the async path if
+    // a non-standard entry skipped the main.js await.
+    if (getDoc()) {
+      const stored = readAssets();
+      if (stored.length > 0) this.items = stored;
+      this.hydrated = true;
+    } else {
+      bootstrapLoro()
+        .then(() => {
+          const stored = readAssets();
+          if (stored.length > 0) this.items = stored;
+          this.hydrated = true;
+        })
+        .catch((e) => {
+          console.warn("assets: hydrate failed:", e?.message ?? e);
+          this.hydrated = true;
+        });
+    }
   }
 
   async addFromFile(file) {

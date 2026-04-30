@@ -5,7 +5,12 @@
 
 import { INITIAL_COMPOSITION, IFRAME_RUNTIME, IFRAME_RUNTIME_AUTOPLAY } from "./initial.js";
 import { assets } from "./assets.svelte.js";
-import { bootstrapLoro, readComposition, writeComposition } from "./loroBackend.svelte.js";
+import {
+  bootstrapLoro,
+  getDoc,
+  readComposition,
+  writeComposition,
+} from "./loroBackend.svelte.js";
 import { recordEdit } from "./historyBackend.svelte.js";
 
 function escapeRe(s) {
@@ -166,28 +171,47 @@ class CompositionStore {
   hydrated = $state(false);
 
   constructor() {
-    bootstrapLoro()
-      .then(() => {
-        const stored = readComposition();
-        if (stored && stored.length > 0) {
-          this.html = stored;
-          this.revision += 1;
-        }
-        this.hydrated = true;
-      })
-      .catch((e) => {
-        console.warn("composition: hydrate failed:", e?.message ?? e);
-        this.hydrated = true;
-      });
+    // main.js awaits bootstrapLoro() before mounting, so by the time
+    // any component constructs this store, getDoc() is non-null.
+    // Hydrate synchronously to avoid the microtask gap that would
+    // otherwise let the first render see INITIAL_COMPOSITION before
+    // the saved state lands.
+    if (getDoc()) {
+      const stored = readComposition();
+      if (stored && stored.length > 0) {
+        this.html = stored;
+        this.revision += 1;
+      }
+      this.hydrated = true;
+    } else {
+      // Fallback for the rare case bootstrap didn't run before mount
+      // (e.g. an alternate entry point that skips main.js's await).
+      bootstrapLoro()
+        .then(() => {
+          const stored = readComposition();
+          if (stored && stored.length > 0) {
+            this.html = stored;
+            this.revision += 1;
+          }
+          this.hydrated = true;
+        })
+        .catch((e) => {
+          console.warn("composition: hydrate failed:", e?.message ?? e);
+          this.hydrated = true;
+        });
+    }
   }
 
   /** Apply the current html as a Loro op + schedule snapshot save +
    *  record an audit-chain commit so the history primitive captures
    *  this edit. The commit is fire-and-forget; recordEdit catches its
-   *  own errors so a history failure doesn't break the editor. */
-  _persist() {
+   *  own errors so a history failure doesn't break the editor.
+   *  An optional message overrides the default — used by revert to
+   *  tag commits with their source ("revert to abc1234"). */
+  _persist(auditMessage) {
     writeComposition(this.html);
-    recordEdit("composition", this.html, `composition save (${this.html.length} chars)`);
+    const msg = auditMessage ?? `composition save (${this.html.length} chars)`;
+    recordEdit("composition", this.html, msg);
   }
 
   clips = $derived(parseClips(this.html));
@@ -207,13 +231,28 @@ class CompositionStore {
     return `<!DOCTYPE html><html><body>${this.html}\n${IFRAME_RUNTIME}</body></html>`;
   }
 
-  /** Replace the entire composition; the player remounts. */
-  set(html) {
+  /** Replace the entire composition; the player remounts.
+   *
+   *  Options:
+   *    auditMessage   override the default audit-chain message
+   *    suppressAudit  true → don't record an audit commit at all
+   *                   (used by cursor-only undo: the user is just
+   *                   viewing a past state, not creating a new edit)
+   *
+   *  When suppressAudit is true, the Loro doc + IDB persist still
+   *  happen — the visible state moves — but the Prolly chain stays
+   *  put. A subsequent real edit picks up the cursor's position and
+   *  truncates the redo space at commit time. */
+  set(html, auditMessage, opts) {
     this.html = String(html ?? "");
     this.curTime = 0;
     this.playing = false;
     this.revision += 1;
-    this._persist();
+    if (opts?.suppressAudit) {
+      writeComposition(this.html);
+    } else {
+      this._persist(auditMessage);
+    }
   }
 
   /** Patch a single clip's data-* attributes in place — fast local

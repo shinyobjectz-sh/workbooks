@@ -28,6 +28,7 @@
 
 import { sha256Hex } from "./modelArtifactResolver";
 import { decryptWithPassphrase, looksLikeAgeEnvelope } from "./encryption";
+import { verifyBlock, isSigned } from "./signature";
 import type { WorkbookData } from "./htmlBindings";
 
 /** What a cell sees after resolution. */
@@ -77,6 +78,25 @@ export interface WorkbookDataResolverOptions {
    * the auth flow.
    */
   requestPassword?: () => Promise<string>;
+  /**
+   * If set, signed `<wb-data>` blocks must carry a pubkey matching
+   * this base64 string. Pinning protects against an attacker who
+   * substitutes their own (pubkey, sig) pair to authenticate
+   * tampered content. Without pinning, signature verification
+   * still proves "this block hasn't been tampered after authoring"
+   * but NOT "the author is the one you expect."
+   *
+   * Recommended: store the workbook's expected author pubkey in
+   * IDB or in your app's code, pass it here on every mount.
+   */
+  expectedAuthorPubkey?: string;
+  /**
+   * Policy for unsigned blocks. Default: "allow" — unsigned blocks
+   * pass through (Phase A behavior). Set to "require" to refuse
+   * any block missing a (pubkey, sig) pair — useful in production
+   * where every author is expected to sign.
+   */
+  signaturePolicy?: "allow" | "require";
 }
 
 const TEXT_MIMES = new Set<string>([
@@ -251,6 +271,37 @@ export function createWorkbookDataResolver(
     }
   }
 
+  /** Apply the signature policy:
+   *   - signed block: verify against expectedAuthorPubkey if pinned
+   *   - unsigned block: allow (default) or refuse (if policy = require)
+   *
+   * Throws on any failure; returns void on success. Called BEFORE
+   * decrypt so a tampered block never reaches the decrypt path. */
+  function verifyOrPolicyCheck(block: WorkbookData, ciphertext: Uint8Array): void {
+    const policy = opts.signaturePolicy ?? "allow";
+    if (isSigned(block)) {
+      verifyBlock(
+        {
+          id: block.id,
+          mime: block.mime,
+          encryption: block.encryption ?? "",
+          // sha256 in canonical bytes is the source-of-truth attribute
+          // value — same string the author signed. Only binary forms
+          // reach this code path so source.sha256 is always present.
+          sha256: (block.source as { sha256: string }).sha256,
+          ciphertext,
+        },
+        { pubkey: block.pubkey, sig: block.sig },
+        opts.expectedAuthorPubkey,
+      );
+    } else if (policy === "require") {
+      throw new Error(
+        `workbook data ${block.id}: signaturePolicy="require" but block is unsigned. ` +
+          `Sign the block via "workbook encrypt --sign-key …".`,
+      );
+    }
+  }
+
   async function resolveOne(block: WorkbookData): Promise<ResolvedData> {
     const cached = cache.get(block.id);
     if (cached) return { ...cached, fromCache: true };
@@ -269,9 +320,13 @@ export function createWorkbookDataResolver(
       text = block.source.content;
     } else if (block.source.kind === "inline-base64") {
       bytes = decodeBase64(block.source.base64);
-      // If encrypted: decrypt FIRST, then sha256 attests to plaintext,
-      // then optionally decompress. Pipeline order matters — we want
-      // sha256 to reflect what the AUTHOR's CSV/etc. hashes to,
+      // Signature verify FIRST: bind the wrapper attributes (id, mime,
+      // encryption, sha256) + ciphertext bytes to the author's
+      // signature. Tamper with any → fail before we decrypt.
+      verifyOrPolicyCheck(block, bytes);
+      // Decrypt FIRST among data transforms, then sha256 attests to
+      // plaintext, then optionally decompress. Order matters — we
+      // want sha256 to reflect what the AUTHOR's CSV/etc. hashes to,
       // independent of compression algorithm choice.
       if (block.encryption === "age-v1") {
         bytes = await decryptOrReprompt(bytes, block.id);
@@ -280,6 +335,7 @@ export function createWorkbookDataResolver(
       if (block.compression) bytes = await decompress(bytes, block.compression);
     } else {
       bytes = await fetchExternal(block.source.src, block.source.bytes);
+      verifyOrPolicyCheck(block, bytes);
       if (block.encryption === "age-v1") {
         bytes = await decryptOrReprompt(bytes, block.id);
       }
