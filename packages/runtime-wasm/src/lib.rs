@@ -45,6 +45,7 @@ pub mod runtime;
 pub mod outputs;
 pub mod prolly;
 pub mod arrow_json;
+pub mod crypto;
 
 #[cfg(feature = "polars-frames")]
 pub mod frames;
@@ -57,6 +58,9 @@ pub mod scripting;
 
 #[cfg(feature = "candle")]
 pub mod inference;
+
+#[cfg(feature = "onnx")]
+pub mod onnx;
 
 #[cfg(feature = "linfa")]
 pub mod train;
@@ -102,6 +106,8 @@ fn active_features() -> Vec<&'static str> {
     features.push("rhai");
     #[cfg(feature = "candle")]
     features.push("candle");
+    #[cfg(feature = "onnx")]
+    features.push("onnx");
     #[cfg(feature = "linfa")]
     features.push("linfa");
     #[cfg(feature = "burn")]

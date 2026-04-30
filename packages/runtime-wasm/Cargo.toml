@@ -52,6 +52,12 @@ candle = ["dep:candle-core", "dep:candle-nn"]
 # Enables real model inference on top of the bare candle feature.
 embeddings = ["candle", "dep:candle-transformers", "dep:tokenizers"]
 
+# Generic ONNX model runner via Candle's onnx feature. Lets the JS side
+# load any ONNX model (depth estimation, detection, segmentation, CLIP)
+# and run inference through Candle instead of bringing in a separate
+# ort-web runtime. Pulls in candle-onnx + image preprocessing.
+onnx = ["candle", "dep:candle-onnx", "dep:image", "dep:prost"]
+
 # Classical ML (sklearn equivalent)
 linfa = ["dep:linfa", "dep:linfa-trees", "dep:linfa-clustering", "dep:linfa-linear"]
 
@@ -73,7 +79,7 @@ image-ops = ["dep:image"]
 # Everything — convenience for development
 all = [
   "polars-frames", "charts", "rhai-glue",
-  "candle", "embeddings", "linfa", "burn", "stats", "vectors",
+  "candle", "embeddings", "onnx", "linfa", "burn", "stats", "vectors",
   "tokenizers", "image-ops",
 ]
 
@@ -127,8 +133,13 @@ image = { version = "0.25", optional = true, default-features = false, features 
 getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 ndarray = { version = "0.15", default-features = false }
 candle-transformers = { version = "0.10.2", default-features = false, optional = true }
+candle-onnx = { version = "0.10", default-features = false, optional = true }
+# prost is candle-onnx's protobuf runtime; we re-decode model bytes
+# directly so we need it as a direct dep.
+prost = { version = "0.14", optional = true }
 # Content-addressed hashing for the Prolly Tree primitive (<wb-history>).
 sha2 = { version = "0.10", default-features = false }
+age = { version = "0.11.3", default-features = false }
 
 [profile.release]
 # Optimize for size first, speed second — bundle size is critical for browser load.
