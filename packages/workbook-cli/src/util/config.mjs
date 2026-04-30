@@ -96,6 +96,47 @@ export async function loadConfig(projectDir) {
     }
   }
 
+  // Encryption — optional. Configures the CLI's --encrypt build stage.
+  // Build flags override any of these. Shape:
+  //
+  //   encrypt: {
+  //     method: "passphrase",        // v1 supports passphrase only
+  //     scope: "full",               // v1 ships "full" (user mode in P3.x)
+  //     passwordEnv: "WORKBOOK_PASSWORD",  // env var to read at build
+  //     devPassword: "dev-fixture",  // used by `workbook dev --encrypt`
+  //   }
+  //
+  // Validation here catches typos / wrong types early; the actual
+  // encrypt stage in build.mjs handles missing env vars at runtime.
+  const VALID_METHODS = new Set(["passphrase"]); // multi-unlock in P3.x
+  const VALID_SCOPES = new Set(["full"]);        // user-scope in P3.x
+  let encrypt = null;
+  if (cfg.encrypt !== undefined && cfg.encrypt !== null) {
+    if (typeof cfg.encrypt !== "object" || Array.isArray(cfg.encrypt)) {
+      throw new Error(
+        `workbook.config: 'encrypt' must be an object (or omitted)`,
+      );
+    }
+    const method = cfg.encrypt.method ?? "passphrase";
+    if (!VALID_METHODS.has(method)) {
+      throw new Error(
+        `workbook.config: encrypt.method must be one of: ${[...VALID_METHODS].join(", ")} (got '${method}')`,
+      );
+    }
+    const scope = cfg.encrypt.scope ?? "full";
+    if (!VALID_SCOPES.has(scope)) {
+      throw new Error(
+        `workbook.config: encrypt.scope must be one of: ${[...VALID_SCOPES].join(", ")} (got '${scope}')`,
+      );
+    }
+    encrypt = {
+      method,
+      scope,
+      passwordEnv: cfg.encrypt.passwordEnv ?? "WORKBOOK_PASSWORD",
+      devPassword: cfg.encrypt.devPassword ?? null,
+    };
+  }
+
   return {
     root,
     configPath,
@@ -111,5 +152,6 @@ export async function loadConfig(projectDir) {
     vite: cfg.vite ?? {},
     // Inline assets unless explicitly disabled; --no-wasm flag flips this.
     inlineRuntime: cfg.inlineRuntime ?? true,
+    encrypt,                    // null when not configured
   };
 }

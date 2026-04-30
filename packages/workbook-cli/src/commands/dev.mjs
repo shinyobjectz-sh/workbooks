@@ -7,8 +7,25 @@ import { loadConfig } from "../util/config.mjs";
 import workbookPlugin from "../plugins/workbookInline.mjs";
 import workbookVirtualModulesPlugin from "../plugins/virtualModules.mjs";
 
-export async function runDev({ project = ".", port, runtime } = {}) {
+export async function runDev(opts = {}) {
+  const { project = ".", port, runtime } = opts;
   const config = await loadConfig(project);
+
+  // --encrypt in dev is informational. Vite serves source files
+  // directly (no built artifact to wrap), so encryption can't
+  // meaningfully run here. Surface the user's intent + how to
+  // exercise the real lock flow.
+  if (opts.encrypt === true) {
+    const devPw = config.encrypt?.devPassword ?? "dev-fixture";
+    process.stderr.write(
+      `[workbook dev] --encrypt requested, but dev mode serves source files ` +
+      `(no artifact to wrap). To test the lock screen end-to-end:\n` +
+      `  workbook build --encrypt\n` +
+      `  open dist/${config.slug}.workbook.html\n` +
+      `  passphrase = ${devPw === null ? "(unset — set encrypt.devPassword)" : `'${devPw}' (from encrypt.devPassword)`}\n\n`,
+    );
+  }
+
   const plugins = [
     workbookVirtualModulesPlugin(),
     workbookPlugin({ config, runtimeOverride: runtime }),

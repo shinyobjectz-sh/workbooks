@@ -30,6 +30,11 @@ async function help() {
     "  --out <dir>     build output dir (default dist)",
     "  --runtime <p>   override path to workbook-runtime checkout (auto-detected)",
     "  --no-wasm       skip inlining wasm + runtime bundle (smaller, dev-only)",
+    "  --encrypt       wrap the artifact in a passphrase lock screen (age-v1).",
+    "                  Pair with --password-stdin / --password-file or set",
+    "                  the env var declared by encrypt.passwordEnv in",
+    "                  workbook.config.mjs (default WORKBOOK_PASSWORD).",
+    "                  Dev mode uses encrypt.devPassword if set.",
     "",
     "Encrypt options (`workbook encrypt`):",
     "  --in <path>           input file to encrypt",
@@ -59,6 +64,11 @@ async function help() {
 // On repeat, values accumulate into an array instead of clobbering.
 const MULTI_VALUE_FLAGS = new Set(["recipient", "recipient-file"]);
 
+// Flags that NEVER take a value — always boolean. Without this, the
+// next positional arg is mistakenly consumed as the flag's value
+// (e.g. `--encrypt examples/stocks` sets encrypt='examples/stocks').
+const BOOLEAN_FLAGS = new Set(["encrypt", "password-stdin", "force"]);
+
 function parseFlags(rest) {
   const out = { _: [] };
   for (let i = 0; i < rest.length; i++) {
@@ -74,8 +84,11 @@ function parseFlags(rest) {
       } else {
         k = a.slice(2);
         if (k.startsWith("no-")) { out[k.slice(3)] = false; continue; }
-        const next = rest[i + 1];
-        value = (next == null || next.startsWith("--")) ? true : (i++, next);
+        if (BOOLEAN_FLAGS.has(k)) { value = true; }
+        else {
+          const next = rest[i + 1];
+          value = (next == null || next.startsWith("--")) ? true : (i++, next);
+        }
       }
       if (MULTI_VALUE_FLAGS.has(k)) {
         if (out[k] === undefined) out[k] = [];
