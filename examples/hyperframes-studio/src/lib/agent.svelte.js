@@ -8,6 +8,15 @@ import {
   redactDataUrlsForAgent,
   expandAssetPlaceholders,
 } from "./composition.svelte.js";
+// Static imports replace the prior `import("./memoryBackend.svelte.js")`
+// dynamic-import dance. The original comment claimed it broke a cycle,
+// but no cycle exists — memoryBackend imports persistence + runtime +
+// historyBackend, none of which import agent. With vite-plugin-singlefile
+// flattening modules into one inline <script>, Vite's transform of
+// dynamic imports leaves forward-ref `() => moduleNs` callbacks that
+// trip TDZ when the bundle order puts the dynamically-imported module
+// AFTER its caller. Static imports get the order right.
+import { readAllTurns, appendTurn, clearTurns } from "./memoryBackend.svelte.js";
 import { assets } from "./assets.svelte.js";
 import { loadSkill, skillsPromptBlock } from "./skills.js";
 
@@ -319,40 +328,36 @@ class AgentStore {
   _persistedThrough = 0;
 
   constructor() {
-    // Lazy-import to break the cycle. memoryBackend itself lazy-loads
-    // the runtime wasm, so this doesn't trigger heavy work eagerly —
-    // first turn append is what actually pulls runtime-wasm in.
-    import("./memoryBackend.svelte.js").then(({ readAllTurns }) => {
-      return readAllTurns().then((turns) => {
-        if (turns.length > 0) {
-          this.thread = turns;
-          this._persistedThrough = turns.length;
-        }
-        this.hydrated = true;
-      });
+    // memoryBackend lazy-loads the runtime wasm internally, so this
+    // doesn't trigger heavy work eagerly — first turn append is what
+    // actually pulls runtime-wasm in.
+    readAllTurns().then((turns) => {
+      if (turns.length > 0) {
+        this.thread = turns;
+        this._persistedThrough = turns.length;
+      }
+      this.hydrated = true;
     });
   }
 
   /** Append every turn at index >= _persistedThrough into the
    *  Arrow IPC memory stream. Tracks how far we've persisted so a
    *  burst of turns becomes a sequence of appends, not a full rewrite. */
-  _persistNewTurns() {
+  async _persistNewTurns() {
     if (this._persistedThrough >= this.thread.length) return;
     const pending = this.thread.slice(this._persistedThrough);
     const baseline = this._persistedThrough;
     this._persistedThrough = this.thread.length;
-    import("./memoryBackend.svelte.js").then(async ({ appendTurn }) => {
-      for (const t of pending) {
-        try {
-          await appendTurn(t);
-        } catch (e) {
-          // On failure, rewind the pointer so the next call retries.
-          this._persistedThrough = Math.min(this._persistedThrough, baseline);
-          console.warn("hf agent: turn persist failed:", e?.message ?? e);
-          return;
-        }
+    for (const t of pending) {
+      try {
+        await appendTurn(t);
+      } catch (e) {
+        // On failure, rewind the pointer so the next call retries.
+        this._persistedThrough = Math.min(this._persistedThrough, baseline);
+        console.warn("hf agent: turn persist failed:", e?.message ?? e);
+        return;
       }
-    });
+    }
   }
 
   _persist() {
@@ -370,7 +375,7 @@ class AgentStore {
     this.thread = [];
     this.streaming = null;
     this._persistedThrough = 0;
-    import("./memoryBackend.svelte.js").then(({ clearTurns }) => clearTurns());
+    clearTurns();
   }
 
   async send(text) {

@@ -19,24 +19,16 @@ import { mount } from "svelte";
 import App from "./App.svelte";
 import { loadRuntime } from "virtual:workbook-runtime";
 import { bootstrapLoro } from "./lib/loroBackend.svelte.js";
+// loroBackend.svelte.js statically imports LoroDoc from loro-crdt
+// AND assigns the full namespace to window.__wb_loro at module
+// load. Importing it here is what gets the loro module into the
+// user's bundle in the right flatten order — purely a sequence
+// guarantee, no value referenced. (Going through main.js for the
+// loro import produced TDZ violations against the singlefile
+// flatten output.)
 
 (async () => {
   try {
-    // Expose loro-crdt to the runtime BEFORE mountHtmlWorkbook. The
-    // runtime bundle runs in a Blob URL context where bare-specifier
-    // imports can't resolve — Vite bundles loro into THIS (user-side)
-    // bundle, and we hand it to the runtime via the global.
-    //
-    // Dynamic import (not static `import * as`) on purpose: loro-crdt
-    // has WASM-init top-level-await, and a static namespace import at
-    // module top introduces TDZ violations through vite-plugin-
-    // singlefile's flatten step. Loading inside the async IIFE
-    // sequences cleanly after all module-init has finished.
-    const loro = await import("loro-crdt");
-    if (typeof window !== "undefined") {
-      window.__wb_loro = loro;
-    }
-
     // Load + mount the workbook runtime. Registers <wb-doc> with the
     // runtime client and exposes window.__wbRuntime for tooling
     // (save handler, loroBackend).

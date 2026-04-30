@@ -1,3 +1,22 @@
+// Static loro-crdt imports: this is what gets the module into the
+// user's Vite-bundled main.js with the right module-init order.
+// Dynamic `await import("loro-crdt")` from main.js produced TDZ
+// violations through vite-plugin-singlefile's flatten step (the
+// preload shim's `() => moduleNs` callback was invoked before the
+// module body had run). A static named import + namespace export
+// matches the original working pre-SDK pattern.
+//
+// LoroDoc itself isn't used here anymore (the runtime registers
+// the handle for our <wb-doc id="hyperframes-state"> element);
+// the import is a sequencing guarantee. The `* as` is so we can
+// hand the full namespace to the runtime via window.__wb_loro
+// before mountHtmlWorkbook runs.
+import { LoroDoc as _LoroDoc } from "loro-crdt";
+import * as _loroNs from "loro-crdt";
+if (typeof window !== "undefined" && _LoroDoc) {
+  window.__wb_loro = _loroNs;
+}
+
 // Workbook state backed by a real Loro CRDT.
 //
 // One Loro doc carries everything that benefits from CRDT semantics:
