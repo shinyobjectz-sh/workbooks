@@ -131,7 +131,11 @@ pub fn onnx_run(handle: u32, inputs: JsValue) -> Result<JsValue, JsValue> {
         out_js.insert(name, TensorJs { data, shape });
     }
 
-    serde_wasm_bindgen::to_value(&out_js)
+    // Serialize HashMap as a plain JS object (default would be a Map),
+    // so callers can do `outputs.predicted_depth` and `Object.keys(...)`.
+    let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+    out_js
+        .serialize(&serializer)
         .map_err(|e| JsValue::from_str(&format!("encode outputs: {e}")))
 }
 
