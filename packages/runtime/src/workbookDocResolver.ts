@@ -107,7 +107,11 @@ export function createWorkbookDocResolver(
     if (cached) return { ...cached, fromCache: true };
 
     let bytes: Uint8Array;
-    if (block.source.kind === "inline-base64") {
+    if (block.source.kind === "empty") {
+      // Fresh CRDT doc — no bytes to import. The dispatcher's load
+      // skips the import step when bytes.length === 0.
+      bytes = new Uint8Array(0);
+    } else if (block.source.kind === "inline-base64") {
       bytes = decodeBase64(block.source.base64);
       const got = await sha256Hex(bytes);
       if (got !== block.source.sha256) {

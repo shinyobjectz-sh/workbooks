@@ -250,7 +250,8 @@ export interface WorkbookDoc {
   historyHorizon?: number;
   source:
     | { kind: "inline-base64"; base64: string; sha256: string }
-    | { kind: "external"; src: string; sha256: string; bytes?: number };
+    | { kind: "external"; src: string; sha256: string; bytes?: number }
+    | { kind: "empty" };
 }
 
 /**
@@ -669,7 +670,6 @@ export function parseWorkbookHtml(root: Element): WorkbookHtmlSpec {
 
     const sha256Attr = (el.getAttribute("sha256") ?? "").toLowerCase();
     const sha256 = VALID_SHA256.test(sha256Attr) ? sha256Attr : null;
-    if (!sha256) continue;
 
     const horizonAttr = Number(el.getAttribute("history-horizon"));
     const historyHorizon =
@@ -677,11 +677,14 @@ export function parseWorkbookHtml(root: Element): WorkbookHtmlSpec {
 
     const srcAttr = el.getAttribute("src");
     const encoding = (el.getAttribute("encoding") ?? "").toLowerCase();
+    const rawText = el.textContent ?? "";
+    const inlineBase64 = encoding === "base64" ? rawText.replace(/\s+/g, "") : "";
 
     let entry: WorkbookDoc | null = null;
 
     if (srcAttr) {
       if (!isFetchableUrl(srcAttr)) continue;
+      if (!sha256) continue; // external sources REQUIRE sha256 — integrity check
       const bytes = parseBytesAttr(el.getAttribute("bytes"));
       entry = {
         id,
@@ -689,22 +692,30 @@ export function parseWorkbookHtml(root: Element): WorkbookHtmlSpec {
         historyHorizon,
         source: { kind: "external", src: srcAttr, sha256, bytes },
       };
-    } else if (encoding === "base64") {
-      const raw = el.textContent ?? "";
-      const base64 = raw.replace(/\s+/g, "");
-      if (!base64) continue;
-      if (base64.length > MAX_INLINE_BASE64_CHARS) continue;
-      const approxBytes = Math.floor((base64.length * 3) / 4);
+    } else if (inlineBase64) {
+      if (!sha256) continue; // inline-with-bytes also requires sha256
+      if (inlineBase64.length > MAX_INLINE_BASE64_CHARS) continue;
+      const approxBytes = Math.floor((inlineBase64.length * 3) / 4);
       if (aggregateInlineBytes + approxBytes > MAX_AGGREGATE_INLINE_BYTES) continue;
       aggregateInlineBytes += approxBytes;
       entry = {
         id,
         format: formatAttr,
         historyHorizon,
-        source: { kind: "inline-base64", base64, sha256 },
+        source: { kind: "inline-base64", base64: inlineBase64, sha256 },
       };
     } else {
-      continue;
+      // Empty <wb-doc>: no src, no inline bytes. Author intent is
+      // "create a fresh CRDT doc; mutations during the session land
+      // back in this element on save". Common in app-shaped
+      // workbooks (e.g. hyperframes-studio) that ship a blank state
+      // and use the file-as-database round-trip.
+      entry = {
+        id,
+        format: formatAttr,
+        historyHorizon,
+        source: { kind: "empty" },
+      };
     }
 
     if (entry) docs.push(entry);

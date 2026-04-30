@@ -3678,7 +3678,9 @@ function createLoroDispatcher() {
       if (existing && !force) return existing;
       const loro = await loadLoro();
       const doc = new loro.LoroDoc();
-      doc.import(bytes);
+      if (bytes && bytes.length > 0) {
+        doc.import(bytes);
+      }
       const handle = wrapHandle(doc);
       handles.set(id, handle);
       return handle;
@@ -3746,7 +3748,9 @@ function createWorkbookDocResolver(opts = {}) {
     const cached = cache.get(block.id);
     if (cached) return { ...cached, fromCache: true };
     let bytes;
-    if (block.source.kind === "inline-base64") {
+    if (block.source.kind === "empty") {
+      bytes = new Uint8Array(0);
+    } else if (block.source.kind === "inline-base64") {
       bytes = decodeBase643(block.source.base64);
       const got = await sha256Hex(bytes);
       if (got !== block.source.sha256) {
@@ -4018,14 +4022,16 @@ function parseWorkbookHtml(root) {
     if (!formatAttr || !ALLOWED_DOC_FORMATS.has(formatAttr)) continue;
     const sha256Attr = (el.getAttribute("sha256") ?? "").toLowerCase();
     const sha256 = VALID_SHA256.test(sha256Attr) ? sha256Attr : null;
-    if (!sha256) continue;
     const horizonAttr = Number(el.getAttribute("history-horizon"));
     const historyHorizon = Number.isFinite(horizonAttr) && horizonAttr >= 0 ? horizonAttr : void 0;
     const srcAttr = el.getAttribute("src");
     const encoding = (el.getAttribute("encoding") ?? "").toLowerCase();
+    const rawText = el.textContent ?? "";
+    const inlineBase64 = encoding === "base64" ? rawText.replace(/\s+/g, "") : "";
     let entry = null;
     if (srcAttr) {
       if (!isFetchableUrl(srcAttr)) continue;
+      if (!sha256) continue;
       const bytes = parseBytesAttr(el.getAttribute("bytes"));
       entry = {
         id,
@@ -4033,22 +4039,25 @@ function parseWorkbookHtml(root) {
         historyHorizon,
         source: { kind: "external", src: srcAttr, sha256, bytes }
       };
-    } else if (encoding === "base64") {
-      const raw = el.textContent ?? "";
-      const base64 = raw.replace(/\s+/g, "");
-      if (!base64) continue;
-      if (base64.length > MAX_INLINE_BASE64_CHARS) continue;
-      const approxBytes = Math.floor(base64.length * 3 / 4);
+    } else if (inlineBase64) {
+      if (!sha256) continue;
+      if (inlineBase64.length > MAX_INLINE_BASE64_CHARS) continue;
+      const approxBytes = Math.floor(inlineBase64.length * 3 / 4);
       if (aggregateInlineBytes + approxBytes > MAX_AGGREGATE_INLINE_BYTES) continue;
       aggregateInlineBytes += approxBytes;
       entry = {
         id,
         format: formatAttr,
         historyHorizon,
-        source: { kind: "inline-base64", base64, sha256 }
+        source: { kind: "inline-base64", base64: inlineBase64, sha256 }
       };
     } else {
-      continue;
+      entry = {
+        id,
+        format: formatAttr,
+        historyHorizon,
+        source: { kind: "empty" }
+      };
     }
     if (entry) docs.push(entry);
   }

@@ -248,7 +248,11 @@ export function createLoroDispatcher(): LoroDispatcher {
       if (existing && !force) return existing;
       const loro = await loadLoro();
       const doc = new loro.LoroDoc();
-      doc.import(bytes);
+      // Empty bytes = fresh doc (kind: "empty" in the parser). Skip
+      // the import call — Loro rejects zero-length input.
+      if (bytes && bytes.length > 0) {
+        doc.import(bytes);
+      }
       const handle = wrapHandle(doc);
       handles.set(id, handle);
       return handle;
