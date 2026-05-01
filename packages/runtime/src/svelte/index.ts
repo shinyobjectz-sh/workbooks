@@ -42,7 +42,7 @@ export type { ListOptions } from "./list.svelte";
 export { text, WbTextState } from "./text.svelte";
 export type { TextOptions } from "./text.svelte";
 
-export { app, docOf, yjsValueOf } from "./app.svelte";
+export { app, docOf } from "./app.svelte";
 export type { AppOptions } from "./app.svelte";
 
 export { undo, WbUndo } from "./undo.svelte";
