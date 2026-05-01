@@ -17,7 +17,9 @@
  * the names stable until a wider sweep makes sense.
  */
 
-import * as Y from "yjs";
+// Resolves Yjs from `globalThis.__wb_yjs` so the runtime bundle and
+// the host app share one Y instance. See yjsHost.ts for rationale.
+import * as Y from "./yjsHost";
 
 // ---------------------------------------------------------------------------
 // Backend-agnostic doc op + handle types. Used by the resolver, the wasm

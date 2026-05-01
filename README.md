@@ -452,10 +452,21 @@ Click `↓ workbook` in any demo's nav. You get one of:
 
 - **`<slug>.workbook`** — JSON, ~1 KB. Needs a host that has the runtime
   (the `runner/` page, the signal app).
-- **`<slug>.workbook.html`** — single HTML file, ~15–20 MB. Wasm + JS
-  bridge + workbook spec all base64-inlined. Open with any browser, no
-  server, no `pkg/` directory. Works from a USB stick. Compresses to ~3 MB
-  on the wire if served over HTTP with brotli.
+- **`<slug>.workbook.html`** — single HTML file. Size depends on what
+  the workbook uses:
+  - **App-shape SPAs** (color.wave): ~800 KB with the default gzip
+    sandwich (`compress: "gzip"`, the build wraps the file in a
+    self-decompressing shim). ~700 KB with `compress: "br"` if your
+    target browser floor supports `DecompressionStream("br")`.
+  - **Notebook/document workbooks** with the full runtime
+    (Polars + Plotters + Rhai + Candle): ~3–5 MB compressed,
+    ~15–20 MB uncompressed.
+
+  Either way: wasm + JS bridge + workbook spec all base64-inlined. Open
+  with any browser. No server, no `pkg/` directory. Works from a USB
+  stick. Set `compress: false` in `workbook.config.mjs` to opt out of
+  the sandwich (e.g. for a CDN-served file with HTTP brotli already in
+  the way).
 
 The portable HTML form is what makes a workbook a *durable* artifact:
 the format and runtime travel together as one file.

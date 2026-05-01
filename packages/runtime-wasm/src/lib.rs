@@ -40,11 +40,25 @@
 
 use wasm_bindgen::prelude::*;
 
+// Core (always on) — wb-doc registration glue, panic-forwarding, the
+// runtime client struct itself. Stays minimal so app-shape workbooks
+// (color.wave) can opt out of every cell-engine + IO module below.
 pub mod bridge;
 pub mod runtime;
+
+// Phase 3 opt-out features. These are default-on so existing workbook
+// builds keep working unchanged, but `--no-default-features` (or
+// `--features=...` listing only what's needed) drops their weight.
+#[cfg(feature = "cell-outputs")]
 pub mod outputs;
+
+#[cfg(feature = "history-prolly")]
 pub mod prolly;
+
+#[cfg(feature = "arrow")]
 pub mod arrow_json;
+
+#[cfg(feature = "crypto")]
 pub mod crypto;
 
 #[cfg(feature = "polars-frames")]

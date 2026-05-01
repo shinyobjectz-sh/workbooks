@@ -26,6 +26,7 @@ import {
   TRIGGER,
   SLOT_PORTABLE,
 } from "../util/triggerSafe.mjs";
+import { brotliWrapHtml } from "../util/compress.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ICON_PATH = path.resolve(HERE, "..", "..", "templates", "default-icon.svg");
@@ -73,13 +74,18 @@ function makeSaveSentinels() {
  *  anchor. Falls back to a </head> regex for HTML inputs that haven't
  *  been through the slot-emitting transform. */
 function injectIntoHead(html, content, { consumeSlot = false } = {}) {
+  // String.replace(str, str) runs `$$`/`$&`/`$1` substitution on the
+  // replacement. The inlined runtime bundle contains identifiers like
+  // `$$constructedBy` (lib0/schema.js); without a function replacement
+  // those get collapsed to `$constructedBy`, shadowing the arrow that
+  // defined them and breaking the bundle at module-eval time.
   if (html.includes(SLOT_PORTABLE)) {
     const replacement = consumeSlot ? content : content + "\n" + SLOT_PORTABLE;
-    return html.replace(SLOT_PORTABLE, replacement);
+    return html.replace(SLOT_PORTABLE, () => replacement);
   }
   const headClose = TRIGGER.HEAD_CLOSE();
   if (html.toLowerCase().includes(headClose)) {
-    return html.replace(new RegExp(headClose, "i"), content + "\n" + headClose);
+    return html.replace(new RegExp(headClose, "i"), () => content + "\n" + headClose);
   }
   return content + "\n" + html;
 }
@@ -90,7 +96,7 @@ function ensureSlot(html) {
   if (html.includes(SLOT_PORTABLE)) return html;
   const headClose = TRIGGER.HEAD_CLOSE();
   if (html.toLowerCase().includes(headClose)) {
-    return html.replace(new RegExp(headClose, "i"), SLOT_PORTABLE + "\n" + headClose);
+    return html.replace(new RegExp(headClose, "i"), () => SLOT_PORTABLE + "\n" + headClose);
   }
   return SLOT_PORTABLE + "\n" + html;
 }
@@ -146,7 +152,9 @@ export async function inlinePortableAssets(html, runtime) {
     escapeRe(BEGIN) + "[\\s\\S]*?" + escapeRe(END),
     "i",
   );
-  if (priorRe.test(html)) return html.replace(priorRe, wrapped);
+  // Function replacement bypasses `$$`/`$&` substitution that would
+  // otherwise mangle bundle identifiers like `$$constructedBy`.
+  if (priorRe.test(html)) return html.replace(priorRe, () => wrapped);
 
   return injectIntoHead(html, wrapped, { consumeSlot: true });
 }
@@ -182,7 +190,7 @@ export async function inlineLinkedStylesheets(html, sourceDir) {
 
   let out = html;
   for (const { tag, replacement } of replacements) {
-    if (tag !== replacement) out = out.replace(tag, replacement);
+    if (tag !== replacement) out = out.replace(tag, () => replacement);
   }
   return out;
 }
@@ -403,6 +411,15 @@ export default function workbookInline({ config, runtimeOverride } = {}) {
         ? `${saveBlock}\n${BEGIN}\n${portableBlock}\n${END}`
         : `${BEGIN}\n${portableBlock}\n${END}`;
 
+      // Phase 4: compression sandwich. Default ON; opt out via
+      // workbook.config.compress = false. Wraps the finalized HTML
+      // in a self-decompressing shim that reduces the on-disk payload
+      // ~70-75% on minified JS. Format defaults to "gzip" (universal
+      // DecompressionStream support since 2022); "br" is ~5-10%
+      // smaller but lands only in Chrome 138+ / Safari 17.6+.
+      const compressEnabled = config.compress !== false;
+      const compressFormat = typeof config.compress === "string" ? config.compress : "gzip";
+
       for (const file of htmlFiles) {
         let src = await fs.readFile(file, "utf8");
         // Anchor on SLOT_PORTABLE if present (the transformIndexHtml
@@ -413,6 +430,11 @@ export default function workbookInline({ config, runtimeOverride } = {}) {
         // can't trick us into landing 16 MB of base64 inside their
         // template literal because the slot is unique.
         src = injectIntoHead(src, wrapped, { consumeSlot: true });
+        const uncompressedSize = Buffer.byteLength(src);
+        let finalSrc = src;
+        if (compressEnabled) {
+          finalSrc = await brotliWrapHtml(src, { format: compressFormat });
+        }
         // Rename <slug>.html → <slug>.workbook.html unless the user
         // already used the .workbook.html extension.
         const base = path.basename(file);
@@ -425,12 +447,21 @@ export default function workbookInline({ config, runtimeOverride } = {}) {
         } else {
           target = file.replace(/\.html$/, ".workbook.html");
         }
-        await fs.writeFile(target, src);
+        await fs.writeFile(target, finalSrc);
         if (target !== file) await fs.rm(file);
-        const sizeMb = (Buffer.byteLength(src) / 1024 / 1024).toFixed(1);
-        process.stdout.write(
-          `[workbook] inlined runtime → ${path.relative(process.cwd(), target)} (${sizeMb} MB)\n`,
-        );
+        const finalBytes = Buffer.byteLength(finalSrc);
+        const sizeMb = (finalBytes / 1024 / 1024).toFixed(2);
+        if (compressEnabled) {
+          const ratio = ((finalBytes / uncompressedSize) * 100).toFixed(1);
+          const beforeMb = (uncompressedSize / 1024 / 1024).toFixed(2);
+          process.stdout.write(
+            `[workbook] inlined + ${compressFormat} → ${path.relative(process.cwd(), target)} (${sizeMb} MB, ${ratio}% of ${beforeMb} MB)\n`,
+          );
+        } else {
+          process.stdout.write(
+            `[workbook] inlined runtime → ${path.relative(process.cwd(), target)} (${sizeMb} MB)\n`,
+          );
+        }
       }
     },
   };
