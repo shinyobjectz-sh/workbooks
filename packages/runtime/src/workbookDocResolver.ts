@@ -1,17 +1,22 @@
 /**
  * Workbook doc resolver — materializes `<wb-doc>` blocks into loaded
- * CRDT handles (today: Loro). Symmetric to data + memory resolvers
- * but specialized for binary CRDT snapshots that need their own
- * sidecar runtime to deserialize.
+ * CRDT handles. Phase 2 of core-0or made Yjs the only backend; the
+ * legacy `format="loro"` path was dropped (pre-1.0 product) and old
+ * workbook files migrate via host-side ports (see color.wave's
+ * one-time IDB migration).
  *
  * Cells consume docs read-only via `reads=` — they receive a JSON
- * projection of the current state. Host-driven mutation lands in a
- * follow-up that mirrors appendMemory's shape (LoroDoc.getMap.set,
- * LoroDoc.commit, then export-and-persist).
+ * projection of the current state. Host-driven mutation goes through
+ * `client.docMutate(id, ops)`, which routes through this resolver's
+ * dispatcher.
  */
 
 import { sha256Hex } from "./modelArtifactResolver";
-import { createLoroDispatcher, type LoroDispatcher, type LoroDocHandle } from "./loroSidecar";
+import {
+  createYjsDispatcher,
+  type YjsDispatcher,
+  type LoroDocHandle,
+} from "./yjsSidecar";
 import type { WorkbookDoc } from "./htmlBindings";
 
 export interface ResolvedDoc {
@@ -37,8 +42,8 @@ export interface WorkbookDocResolverOptions {
   allowedHosts?: string[] | null;
   /** Override fetch (auth headers, retries). Defaults to global fetch. */
   fetchBytes?: (url: string) => Promise<Uint8Array>;
-  /** Pre-built Loro dispatcher (e.g. shared across resolvers). */
-  loroDispatcher?: LoroDispatcher;
+  /** Pre-built Yjs dispatcher (e.g. shared across resolvers). */
+  yjsDispatcher?: YjsDispatcher;
 }
 
 function hostAllowed(rawUrl: string, allow: ReadonlyArray<string>): boolean {
@@ -71,7 +76,7 @@ export function createWorkbookDocResolver(
   const allow: ReadonlyArray<string> | null =
     opts.allowedHosts === null ? null : opts.allowedHosts ?? [];
   const fetchBytes = opts.fetchBytes ?? defaultFetchBytes;
-  const loro = opts.loroDispatcher ?? createLoroDispatcher();
+  const yjs = opts.yjsDispatcher ?? createYjsDispatcher();
   const cache = new Map<string, ResolvedDoc>();
 
   async function fetchExternal(
@@ -108,8 +113,6 @@ export function createWorkbookDocResolver(
 
     let bytes: Uint8Array;
     if (block.source.kind === "empty") {
-      // Fresh CRDT doc — no bytes to import. The dispatcher's load
-      // skips the import step when bytes.length === 0.
       bytes = new Uint8Array(0);
     } else if (block.source.kind === "inline-base64") {
       bytes = decodeBase64(block.source.base64);
@@ -129,12 +132,9 @@ export function createWorkbookDocResolver(
     }
 
     let handle: LoroDocHandle;
-    if (block.format === "loro") {
-      handle = await loro.load({ id: block.id, bytes });
+    if (block.format === "yjs") {
+      handle = await yjs.load({ id: block.id, bytes });
     } else {
-      // ALLOWED_DOC_FORMATS in the parser keeps this unreachable today,
-      // but the explicit branch is kept so adding a new format is a
-      // single-call-site change.
       throw new Error(`unsupported wb-doc format: ${(block as { format: string }).format}`);
     }
 
@@ -153,7 +153,7 @@ export function createWorkbookDocResolver(
     },
     clear() {
       cache.clear();
-      loro.dispose();
+      yjs.dispose();
     },
   };
 }

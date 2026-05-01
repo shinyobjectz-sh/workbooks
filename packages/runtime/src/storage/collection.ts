@@ -1,17 +1,17 @@
 /**
  * `wb.collection(id, opts)` — whole-record-replace list keyed by `.id`.
  *
- * Backed by a LoroList of JSON-encoded records. Authors think in terms
- * of "list of things" — upsert by id, remove by id, find by id. The
- * SDK handles JSON marshaling, dedup-by-id on upsert, and reactive
- * reads.
+ * Backed by a Y.Array<string> of JSON-encoded records. Authors think
+ * in terms of "list of things" — upsert by id, remove by id, find by
+ * id. The SDK handles JSON marshaling, dedup-by-id on upsert, and
+ * reactive reads.
  *
- * Why JSON-strings inside a list (vs LoroMap-of-Maps):
- *   - matches the existing color.wave wire format byte-for-byte; no
- *     migration needed when this SDK lands.
- *   - record IDs are author-defined strings; LoroList of JSON strings
+ * Why JSON-strings inside an array (vs Y.Map-of-Maps):
+ *   - matches the existing color.wave wire format byte-for-byte (post-
+ *     migration); legacy wire formats port via legacyLoroPort.
+ *   - record IDs are author-defined strings; Y.Array of JSON strings
  *     gives stable iteration order and trivial replaceAll semantics.
- *   - concurrent forks merge as list-CRDT operations; dedup-on-read
+ *   - concurrent forks merge as array-CRDT operations; dedup-on-read
  *     collapses any duplicate entries that survive a merge.
  *
  * Reactivity: same shape as wb.text — `.list` is a getter (current
@@ -19,7 +19,7 @@
  * commit. Svelte 5 consumers wrap with `$state` for fine-grained tracking.
  */
 
-import { resolveDoc, type LoroDoc, type LoroList } from "./bootstrap";
+import { resolveDoc, Y } from "./bootstrap";
 
 export interface WbRecord {
   id: string;
@@ -45,7 +45,7 @@ export interface WbCollection<T extends WbRecord = WbRecord> {
   /** Subscribe to list changes. Returns unsubscribe. Fires once with
    *  the current snapshot on registration. */
   subscribe(fn: (list: T[]) => void): () => void;
-  /** Resolves once the underlying LoroDoc is bound. */
+  /** Resolves once the underlying Y.Doc is bound. */
   ready(): Promise<void>;
 }
 
@@ -60,16 +60,17 @@ export function createCollection<T extends WbRecord = WbRecord>(
   id: string,
   opts: WbCollectionOptions = {},
 ): WbCollection<T> {
-  let doc: LoroDoc | null = null;
-  let list: LoroList | null = null;
+  let doc: Y.Doc | null = null;
+  let list: Y.Array<string> | null = null;
   let cached: T[] = [];
   const listeners = new Set<(value: T[]) => void>();
   const pending: PendingOp<T>[] = [];
 
-  function readFromList(l: LoroList): T[] {
+  function readFromList(l: Y.Array<string>): T[] {
     const out: T[] = [];
     const seen = new Map<string, number>();
-    for (const v of l.toArray()) {
+    const arr = l.toArray();
+    for (const v of arr) {
       if (typeof v !== "string") continue;
       try {
         const parsed = JSON.parse(v) as T;
@@ -103,9 +104,11 @@ export function createCollection<T extends WbRecord = WbRecord>(
 
   function rebuild(next: T[]) {
     if (!doc || !list) return;
-    if (list.length > 0) list.delete(0, list.length);
-    for (const r of next) list.push(JSON.stringify(r));
-    doc.commit();
+    doc.transact(() => {
+      if (list!.length > 0) list!.delete(0, list!.length);
+      const encoded = next.map((r) => JSON.stringify(r));
+      if (encoded.length > 0) list!.push(encoded);
+    });
     cached = next;
     notify();
   }
@@ -134,7 +137,7 @@ export function createCollection<T extends WbRecord = WbRecord>(
 
   const readyPromise = (async () => {
     doc = await resolveDoc(opts.doc ?? null);
-    list = doc.getList(id);
+    list = doc.getArray<string>(id);
     const hydrated = readFromList(list);
 
     // First-fire post-hydration: emit the loaded snapshot to any
@@ -153,7 +156,7 @@ export function createCollection<T extends WbRecord = WbRecord>(
       else if (op.kind === "replaceAll" && op.records) applyReplaceAll(op.records);
     }
 
-    doc.subscribe(() => refresh());
+    list.observe(() => refresh());
   })();
   readyPromise.catch((e) => {
     console.warn(`wb.collection("${id}"): bootstrap failed:`, e);

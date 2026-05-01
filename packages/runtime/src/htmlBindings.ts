@@ -227,12 +227,15 @@ export interface WorkbookMemory {
  * document-shaped and mutable: nested maps, lists, text, hierarchies
  * that fork-and-merge cleanly.
  *
- * First supported format is Loro (Rust+WASM, shallow snapshots).
- * Automerge / Yjs may follow as additional `format=` values; the
- * resolver dispatches by format. Loro-crdt is an optional peer dep
- * lazy-loaded only when a workbook contains a <wb-doc>.
+ * Supported formats:
+ *   - "yjs"   pure-JS Yjs (only backend since Phase 2 of core-0or).
+ *             Bytes are `Y.encodeStateAsUpdate(doc)` output; load via
+ *             `Y.applyUpdate(doc, bytes)`. Legacy `format="loro"`
+ *             files are no longer loadable by the runtime — hosts
+ *             must port via a one-time IDB migration before mount
+ *             (see color.wave for the pattern).
  *
- *   <wb-doc id="agent-state" format="loro" history-horizon="100"
+ *   <wb-doc id="agent-state" format="yjs"
  *           encoding="base64" sha256="...">AQEBAAhz...</wb-doc>
  *
  * Initial ship is read-only: cells read the doc as a JSON projection
@@ -241,14 +244,7 @@ export interface WorkbookMemory {
  */
 export interface WorkbookDoc {
   id: string;
-  format: "loro";
-  /**
-   * Optional shallow-snapshot history horizon — the number of
-   * recent ops to retain in full DAG form before older history is
-   * collapsed into a frozen baseline. Format-specific; today only
-   * Loro honors it. UI hint only at parse time.
-   */
-  historyHorizon?: number;
+  format: "yjs";
   source:
     | { kind: "inline-base64"; base64: string; sha256: string }
     | { kind: "external"; src: string; sha256: string; bytes?: number }
@@ -404,7 +400,7 @@ const MAX_MEMORY_BLOCKS = 16;
 /** `<wb-doc>` caps. Even tighter — a workbook with many CRDT docs is
  *  unusual, and each doc carries hierarchical state that scales fast. */
 const MAX_DOC_BLOCKS = 8;
-const ALLOWED_DOC_FORMATS = new Set<WorkbookDoc["format"]>(["loro"]);
+const ALLOWED_DOC_FORMATS = new Set<WorkbookDoc["format"]>(["yjs"]);
 
 /** `<wb-history>` caps. A workbook should have at most one history
  *  block (the chain of commits that produced it). The cap is 2 to
@@ -657,8 +653,8 @@ export function parseWorkbookHtml(root: Element): WorkbookHtmlSpec {
 
   // CRDT docs. Hierarchical mergeable state. Reuses the binary-only
   // storage shapes from <wb-memory> (inline-base64 or external),
-  // plus a `format=` allowlist so non-Loro CRDTs can be added later
-  // without breaking existing parsers.
+  // plus a `format=` allowlist so additional CRDTs can be added
+  // later without breaking existing parsers.
   for (const el of root.querySelectorAll("wb-doc")) {
     if (docs.length >= MAX_DOC_BLOCKS) break;
     const id = validId(el.getAttribute("id"));
@@ -671,10 +667,6 @@ export function parseWorkbookHtml(root: Element): WorkbookHtmlSpec {
 
     const sha256Attr = (el.getAttribute("sha256") ?? "").toLowerCase();
     const sha256 = VALID_SHA256.test(sha256Attr) ? sha256Attr : null;
-
-    const horizonAttr = Number(el.getAttribute("history-horizon"));
-    const historyHorizon =
-      Number.isFinite(horizonAttr) && horizonAttr >= 0 ? horizonAttr : undefined;
 
     const srcAttr = el.getAttribute("src");
     const encoding = (el.getAttribute("encoding") ?? "").toLowerCase();
@@ -690,7 +682,6 @@ export function parseWorkbookHtml(root: Element): WorkbookHtmlSpec {
       entry = {
         id,
         format: formatAttr,
-        historyHorizon,
         source: { kind: "external", src: srcAttr, sha256, bytes },
       };
     } else if (inlineBase64) {
@@ -702,19 +693,17 @@ export function parseWorkbookHtml(root: Element): WorkbookHtmlSpec {
       entry = {
         id,
         format: formatAttr,
-        historyHorizon,
         source: { kind: "inline-base64", base64: inlineBase64, sha256 },
       };
     } else {
       // Empty <wb-doc>: no src, no inline bytes. Author intent is
       // "create a fresh CRDT doc; mutations during the session land
       // back in this element on save". Common in app-shaped
-      // workbooks (e.g. hyperframes-studio) that ship a blank state
-      // and use the file-as-database round-trip.
+      // workbooks (e.g. color.wave) that ship a blank state and use
+      // the file-as-database round-trip.
       entry = {
         id,
         format: formatAttr,
-        historyHorizon,
         source: { kind: "empty" },
       };
     }

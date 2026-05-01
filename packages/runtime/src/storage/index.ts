@@ -1,8 +1,8 @@
 /**
  * `wb.*` — author-facing storage SDK for workbooks.
  *
- * Three primitives, each backed by a Loro CRDT container under the
- * hood. Authors don't see Loro; they see "applied storage concepts":
+ * Three primitives, each backed by a Yjs shared type under the hood.
+ * Authors don't see Yjs; they see "applied storage concepts":
  *
  *   wb.text(id, opts)        char-level merge (prose, source code)
  *   wb.collection(id, opts)  whole-record-replace list, keyed by .id
@@ -22,9 +22,9 @@
  *   • Pre-mount writes are queued and replayed once the doc resolves.
  *
  * What's NOT here yet:
- *   • `wb.tree(id)` — nested document trees. Out of scope for Phase 1;
- *     the Loro Map → Map → … walker exists in loroSidecar but the
- *     reactive surface is deferred to a follow-up.
+ *   • `wb.tree(id)` — nested document trees. Out of scope; the
+ *     Y.Map → Y.Map → … walker is straightforward but the reactive
+ *     surface is deferred to a follow-up.
  *   • Pluggable backends. Phase 2 introduces a JSON-snapshot tier
  *     (smaller bundles for read-mostly workbooks); Phase 3 compiles
  *     out unused backends. Phase 1 is structural-only — no behavior
