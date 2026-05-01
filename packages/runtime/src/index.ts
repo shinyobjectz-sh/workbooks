@@ -13,10 +13,10 @@
 export * from "./types";
 
 // Author-facing storage SDK — `wb.text` / `wb.collection` / `wb.value`.
-// Three applied-storage primitives backed by Loro CRDT containers. Hides
-// raw Loro from authors and centralizes the diff-shrink + dedup-by-id
-// patterns the host apps used to ship inline. Phase 1 is structural-
-// only; pluggable backends + bundle-size wins land in P2/P3.
+// Three applied-storage primitives backed by Yjs shared types under the
+// hood (Phase 2 of core-0or migrated this from Loro). Hides the CRDT
+// engine from authors and centralizes the diff-shrink + dedup-by-id
+// patterns the host apps used to ship inline.
 export { wb } from "./storage";
 export type {
   WbText,
@@ -277,16 +277,18 @@ export type {
   WorkbookMemoryResolverOptions,
 } from "./workbookMemoryResolver";
 
-// Workbook doc resolver — materializes <wb-doc> CRDT blocks (Loro
-// today, Automerge / Yjs later) into loaded handles. Cells consume
-// docs read-only as JSON projections via reads=. Lazy-loads the
-// loro-crdt sidecar only when a workbook contains a <wb-doc>.
+// Workbook doc resolver — materializes <wb-doc> CRDT blocks into
+// loaded handles. Default backend is Yjs (pure-JS, ~50 KB); the
+// resolver dispatches by `format=` so legacy `format="loro"` files
+// can still parse if a host supplies its own port.
 export { createWorkbookDocResolver } from "./workbookDocResolver";
 export type {
   ResolvedDoc,
   WorkbookDocResolver,
   WorkbookDocResolverOptions,
 } from "./workbookDocResolver";
+export { createYjsDispatcher } from "./yjsSidecar";
+export type { YjsDispatcher } from "./yjsSidecar";
 export { createLoroDispatcher, topLevel } from "./loroSidecar";
 export type {
   LoroDispatcher,

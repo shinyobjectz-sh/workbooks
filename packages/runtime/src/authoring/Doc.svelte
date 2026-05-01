@@ -4,12 +4,11 @@
    * primitive: state lives in the .workbook.html file, round-trips
    * through Cmd+S, no browser cache layer.
    *
-   * Internally renders a <wb-doc> custom element (HTML spec requires
-   * hyphenated custom-element names; the SDK is the plain author
-   * surface). Once mounted, the runtime parses the element and
-   * registers a Loro CRDT handle that the workbook can mutate.
-   * On Cmd+S, the save handler calls exportDoc(id) and writes the
-   * current state back into the element before snapshotting.
+   * Internally renders a <wb-doc> custom element. Once mounted, the
+   * runtime parses the element and registers a CRDT handle (Yjs by
+   * default since Phase 2 of core-0or). On Cmd+S, the save handler
+   * calls exportDoc(id) and writes the current state back into the
+   * element before snapshotting.
    *
    *   <WorkbookApp>
    *     <Doc id="composition" />
@@ -20,12 +19,12 @@
    *   const composition = useDoc("composition");
    *
    * Format options:
-   *   - "loro" (default) — Loro CRDT, hierarchical state with merge
-   *     semantics. Only supported value today.
+   *   - "yjs" (default) — Yjs, pure-JS hierarchical CRDT.
+   *   - "loro" — legacy backend; runtime no longer ships it. Hosts
+   *     supplying their own port can still parse files with this format.
    *
-   * Optional `initial` is base64-encoded Loro snapshot bytes to seed
-   * the doc; most authors omit this and mutate imperatively via the
-   * Loro API.
+   * Optional `initial` is base64-encoded backend-specific update bytes
+   * to seed the doc; most authors omit this.
    */
 
   import { requireAuthoringContext } from "./context";
@@ -33,16 +32,16 @@
   type Props = {
     /** Stable doc id. Cells + other components reference it by id. */
     id: string;
-    /** CRDT format. Loro is the only supported value today. */
-    format?: "loro";
-    /** Retention horizon — keeps the last N ops in the saved state. */
+    /** CRDT format. "yjs" by default; "loro" is legacy. */
+    format?: "yjs" | "loro";
+    /** Retention horizon — Loro-only; ignored for Yjs. */
     historyHorizon?: number;
     /** Base64-encoded initial bytes (rare; usually omitted). */
     initial?: string;
     /** sha256 hex of `initial` — runtime verifies. */
     sha256?: string;
   };
-  let { id, format = "loro", historyHorizon, initial, sha256 }: Props = $props();
+  let { id, format = "yjs", historyHorizon, initial, sha256 }: Props = $props();
 
   // Pull the context only to fail fast if <Doc> is used outside
   // <WorkbookApp>. We don't need anything from it — registration

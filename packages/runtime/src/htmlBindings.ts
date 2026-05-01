@@ -227,12 +227,16 @@ export interface WorkbookMemory {
  * document-shaped and mutable: nested maps, lists, text, hierarchies
  * that fork-and-merge cleanly.
  *
- * First supported format is Loro (Rust+WASM, shallow snapshots).
- * Automerge / Yjs may follow as additional `format=` values; the
- * resolver dispatches by format. Loro-crdt is an optional peer dep
- * lazy-loaded only when a workbook contains a <wb-doc>.
+ * Supported formats:
+ *   - "yjs"   pure-JS Yjs (default since Phase 2 of core-0or). Bytes
+ *             are `Y.encodeStateAsUpdate(doc)` output; load via
+ *             `Y.applyUpdate(doc, bytes)`.
+ *   - "loro"  legacy backend retained for parsing old workbook files
+ *             in transit; the runtime no longer ships a Loro
+ *             dispatcher, so legacy hosts must port via their own
+ *             one-time migration (see color.wave's legacyLoroPort).
  *
- *   <wb-doc id="agent-state" format="loro" history-horizon="100"
+ *   <wb-doc id="agent-state" format="yjs"
  *           encoding="base64" sha256="...">AQEBAAhz...</wb-doc>
  *
  * Initial ship is read-only: cells read the doc as a JSON projection
@@ -241,12 +245,11 @@ export interface WorkbookMemory {
  */
 export interface WorkbookDoc {
   id: string;
-  format: "loro";
+  format: "yjs" | "loro";
   /**
-   * Optional shallow-snapshot history horizon — the number of
-   * recent ops to retain in full DAG form before older history is
-   * collapsed into a frozen baseline. Format-specific; today only
-   * Loro honors it. UI hint only at parse time.
+   * Optional shallow-snapshot history horizon — Loro-specific hint
+   * (no Yjs analog). Retained for backwards-compat parsing only;
+   * ignored at resolve time.
    */
   historyHorizon?: number;
   source:
@@ -404,7 +407,7 @@ const MAX_MEMORY_BLOCKS = 16;
 /** `<wb-doc>` caps. Even tighter — a workbook with many CRDT docs is
  *  unusual, and each doc carries hierarchical state that scales fast. */
 const MAX_DOC_BLOCKS = 8;
-const ALLOWED_DOC_FORMATS = new Set<WorkbookDoc["format"]>(["loro"]);
+const ALLOWED_DOC_FORMATS = new Set<WorkbookDoc["format"]>(["yjs", "loro"]);
 
 /** `<wb-history>` caps. A workbook should have at most one history
  *  block (the chain of commits that produced it). The cap is 2 to
