@@ -1,5 +1,12 @@
 # Workbooks
 
+<p align="center">
+  <video src="https://github.com/shinyobjectz-sh/workbooks/raw/main/assets/readme-banner.mp4"
+         poster="assets/readme-banner-poster.jpg"
+         muted autoplay loop playsinline
+         width="100%"></video>
+</p>
+
 Plain HTML files that save themselves.
 
 Open one. Edit it. Hit save. The file on disk updates.
