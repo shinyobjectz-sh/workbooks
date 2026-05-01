@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Workbooks</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#09090b">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #09090b;
+    color: #fafafa;
+    font: 14px/1.6 ui-sans-serif, system-ui, -apple-system, sans-serif;
+    text-align: center;
+    padding: 32px 16px;
+  }
+  .card {
+    max-width: 520px;
+    background: #18181b;
+    border: 1px solid #27272a;
+    border-radius: 8px;
+    padding: 32px;
+  }
+  h1 { font-size: 20px; margin: 0 0 8px; font-weight: 600; }
+  p { color: #a1a1aa; margin: 0 0 16px; }
+  code { background: #27272a; padding: 2px 6px; border-radius: 3px; font-size: 13px; }
+  .muted { color: #71717a; font-size: 12px; }
+</style>
+</head>
+<body>
+<main class="card">
+  <h1>Workbooks</h1>
+  <p>Single-file workbook applications. The file is the database.</p>
+  <p>Open any <code>.workbook.html</code> file from your computer — this app runs it and saves your edits back to the same file.</p>
+  <p class="muted" id="install-status">checking install status…</p>
+  <p class="muted" id="launch-status"></p>
+</main>
+
+<script type="module">
+// Register service worker so the PWA is installable and the OS file
+// associations bind to this scope.
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch((e) => {
+    console.warn("[shell] SW registration failed:", e);
+  });
+}
+
+const installStatus = document.getElementById("install-status");
+const launchStatus = document.getElementById("launch-status");
+
+const inStandalone =
+  window.matchMedia("(display-mode: standalone)").matches
+  || window.navigator.standalone === true;
+
+if (inStandalone) {
+  installStatus.textContent = "Installed — workbook files will open here.";
+} else {
+  installStatus.textContent = "Add to home screen / install to register as the default opener for .workbook.html files.";
+}
+
+// Subscribe to launchQueue. When the OS launches the PWA via a file
+// association, we receive FileSystemFileHandles here. The shell's job
+// is to:
+//   1. Read the file's bytes (it's a workbook .html with substrate
+//      runtime embedded).
+//   2. Pass control to the substrate-aware runtime inside that file.
+// Today: simplest implementation is to display the file's content via
+// document.write equivalent — render the workbook's HTML directly,
+// inheriting the same FileSystemFileHandle the shell received.
+//
+// The launched workbook's runtime checks `window.__wbInbound` for the
+// handle on boot and uses it as its T2 transport handle.
+if ("launchQueue" in window) {
+  window.launchQueue.setConsumer(async (params) => {
+    if (!params.files || params.files.length === 0) return;
+    const handle = params.files[0];
+    launchStatus.textContent = `launching ${handle.name}…`;
+    try {
+      const file = await handle.getFile();
+      const html = await file.text();
+      // Hand the handle to the workbook's runtime via window.__wbInbound,
+      // then replace the document with the workbook's HTML.
+      window.__wbInbound = { handle, sourceName: handle.name };
+      // Open in this same window — the workbook's runtime will see
+      // window.__wbInbound on boot and pick up the handle as its T2
+      // transport.
+      document.open();
+      document.write(html);
+      document.close();
+    } catch (e) {
+      launchStatus.textContent = "failed: " + (e.message ?? String(e));
+    }
+  });
+}
+</script>
+</body>
+</html>
