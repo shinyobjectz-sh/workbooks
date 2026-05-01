@@ -1,0 +1,12 @@
+{
+  "name": "@work.books/substrate",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Workbook substrate v0 — file-as-database persistence",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "spike:parser:generate": "node spikes/parser/generate-test-file.mjs",
+    "spike:parser:extract": "node spikes/parser/test-extract-node.mjs"
+  }
+}
