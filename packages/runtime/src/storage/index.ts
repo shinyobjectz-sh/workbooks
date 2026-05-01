@@ -1,9 +1,8 @@
 /**
  * `wb.*` — author-facing storage SDK for workbooks.
  *
- * Three primitives, each backed by a Yjs CRDT container under the
- * hood (Y.Text / Y.Array / Y.Map). Authors don't see Yjs; they see
- * "applied storage concepts":
+ * Three primitives, each backed by a Yjs shared type under the hood.
+ * Authors don't see Yjs; they see "applied storage concepts":
  *
  *   wb.text(id, opts)        char-level merge (prose, source code)
  *   wb.collection(id, opts)  whole-record-replace list, keyed by .id
@@ -17,16 +16,15 @@
  *   • `.subscribe(fn)` registers a listener; fires once with the
  *     current value on registration so consumers don't need a
  *     separate "read initial" call. Returns an unsubscribe fn.
- *   • Mutations run inside `doc.transact(() => …)` so the host's
- *     autosave layer (which subscribes at the doc level — e.g.
- *     substrate's `bindYjsAutoEmit` listening on updateV2) sees one
- *     event per logical change. The SDK never schedules its own
- *     persistence.
+ *   • Mutations call `doc.commit()` so the host's autosave layer
+ *     (which subscribes to local commits → IDB / disk) sees the
+ *     change. The SDK never schedules its own persistence.
  *   • Pre-mount writes are queued and replayed once the doc resolves.
  *
  * What's NOT here yet:
- *   • `wb.tree(id)` — nested document trees. Out of scope for Phase 1;
- *     a Y.Map → Y.Map → … reactive walker is deferred to a follow-up.
+ *   • `wb.tree(id)` — nested document trees. Out of scope; the
+ *     Y.Map → Y.Map → … walker is straightforward but the reactive
+ *     surface is deferred to a follow-up.
  *   • Pluggable backends. Phase 2 introduces a JSON-snapshot tier
  *     (smaller bundles for read-mostly workbooks); Phase 3 compiles
  *     out unused backends. Phase 1 is structural-only — no behavior

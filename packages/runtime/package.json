@@ -98,9 +98,13 @@
       "types": "./src/workbookDocResolver.ts",
       "default": "./src/workbookDocResolver.ts"
     },
-    "./loroSidecar": {
-      "types": "./src/loroSidecar.ts",
-      "default": "./src/loroSidecar.ts"
+    "./yjsSidecar": {
+      "types": "./src/yjsSidecar.ts",
+      "default": "./src/yjsSidecar.ts"
+    },
+    "./storage": {
+      "types": "./src/storage/index.ts",
+      "default": "./src/storage/index.ts"
     },
     "./workbookHistoryResolver": {
       "types": "./src/workbookHistoryResolver.ts",
@@ -166,7 +170,6 @@
     "plotly.js-dist-min": "^2.0.0 || ^3.0.0",
     "three": "^0.160.0 || ^0.170.0 || ^0.180.0",
     "@sqlite.org/sqlite-wasm": "^3.45.0",
-    "loro-crdt": "^1.0.0",
     "age-encryption": "^0.2.0"
   },
   "peerDependenciesMeta": {
@@ -209,9 +212,6 @@
     "@sqlite.org/sqlite-wasm": {
       "optional": true
     },
-    "loro-crdt": {
-      "optional": true
-    },
     "age-encryption": {
       "optional": true
     }
@@ -227,6 +227,8 @@
     "dompurify": "^3.2.0",
     "fflate": "^0.8.0",
     "@noble/ed25519": "^3",
-    "@noble/hashes": "^2"
+    "@noble/hashes": "^2",
+    "yjs": "^13.6.0",
+    "y-indexeddb": "^9.0.0"
   }
 }

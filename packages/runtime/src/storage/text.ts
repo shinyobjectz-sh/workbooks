@@ -3,23 +3,23 @@
  *
  * Backed by Yjs's Y.Text. Authors call `.set(html)`; we shrink the
  * common prefix + suffix between old + new and emit one delete + one
- * insert at the diverging region. Concurrent edits at non-overlapping
- * regions of a long string merge cleanly via Yjs's RGA-flavored text
- * CRDT; concurrent edits at the SAME byte range still resolve
- * deterministically.
+ * insert at the diverging region inside a `doc.transact(...)` block.
+ * Concurrent edits at non-overlapping regions of a long string merge
+ * cleanly via Y.Text's CRDT; concurrent edits at the SAME byte range
+ * still resolve deterministically.
  *
- * The diff-shrink algorithm here was migrated from
- * apps/colorwave/src/lib/loroBackend.svelte.js's writeComposition;
- * keeping it inside the SDK means every workbook author gets the same
- * merge semantics for free.
+ * The diff-shrink algorithm is the same one this module shipped pre-
+ * Phase-2 against Loro — a structural delete + insert patch keeps the
+ * common edit shapes (full-string set, prepend, append, in-place patch)
+ * down to a single op pair.
  *
  * Reactivity: framework-agnostic. `.value` is a getter; `.subscribe(fn)`
- * fires every time the underlying Y.Doc emits an updateV2 (local +
- * remote). Svelte 5 consumers wrap the getter in `$state` if they want
- * fine-grained reactivity; vanilla consumers poll or subscribe.
+ * fires every time the underlying Y.Doc commits (local + remote).
+ * Svelte 5 consumers wrap the getter in `$state` if they want fine-
+ * grained reactivity; vanilla consumers poll or subscribe.
  */
 
-import { resolveDoc, type YDoc, type YText } from "./bootstrap";
+import { resolveDoc, Y } from "./bootstrap";
 
 export interface WbTextOptions {
   /** Doc id this text belongs to. Defaults to the first registered doc. */
@@ -31,7 +31,7 @@ export interface WbTextOptions {
 export interface WbText {
   /** Current value (synchronous; "" until hydrated). */
   readonly value: string;
-  /** Replace the entire string via diff-shrunk Yjs ops in one transaction. */
+  /** Replace the entire string via diff-shrunk Y.Text ops + transact. */
   set(next: string): void;
   /** Subscribe to value changes. Fires once with the current value
    *  on registration so consumers don't need a separate "read initial"
@@ -80,8 +80,8 @@ function diffShrink(oldStr: string, newStr: string): {
 
 export function createText(id: string, opts: WbTextOptions = {}): WbText {
   let cachedValue = "";
-  let doc: YDoc | null = null;
-  let text: YText | null = null;
+  let doc: Y.Doc | null = null;
+  let text: Y.Text | null = null;
   const listeners = new Set<(value: string) => void>();
 
   // Pending writes that fire before the doc resolves. We replay them
@@ -104,10 +104,6 @@ export function createText(id: string, opts: WbTextOptions = {}): WbText {
     const cur = text.toString();
     if (cur === next) return;
     const { start, deleteLen, insertText } = diffShrink(cur, next);
-    // Yjs has no explicit `commit()`; transact() opens an atomic batch
-    // and emits one updateV2 + one afterTransaction event when it
-    // returns. Persisters subscribed at the doc level see exactly one
-    // event per applySet call.
     doc.transact(() => {
       if (deleteLen > 0) text!.delete(start, deleteLen);
       if (insertText.length > 0) text!.insert(start, insertText);
@@ -140,9 +136,7 @@ export function createText(id: string, opts: WbTextOptions = {}): WbText {
     if (cachedValue.length === 0 && pendingWrite == null && opts.initial) {
       const init = String(opts.initial);
       if (init.length > 0) {
-        doc.transact(() => {
-          text!.insert(0, init);
-        });
+        doc.transact(() => { text!.insert(0, init); });
         cachedValue = init;
         for (const fn of listeners) {
           try { fn(cachedValue); } catch (e) { console.warn("wb.text listener threw:", e); }
@@ -156,12 +150,10 @@ export function createText(id: string, opts: WbTextOptions = {}): WbText {
       applySet(target);
     }
 
-    // Subscribe at the doc level — Yjs's afterTransaction fires once
-    // per atomic batch (incl. remote updateV2 application), giving us
-    // a single coalesced refresh per logical change. updateV2 also
-    // works but afterTransaction has a wider arity (covers local +
-    // remote uniformly).
-    doc.on("afterTransaction", () => refresh());
+    // Y.Text observe — fires for both local and remote ops. The
+    // refresh() call short-circuits when the projected value hasn't
+    // changed, so no-op transactions don't churn listeners.
+    text.observe(() => refresh());
   })();
   readyPromise.catch((e) => {
     console.warn(`wb.text("${id}"): bootstrap failed:`, e);

@@ -346,6 +346,9 @@ function createRuntimeClient(opts) {
     },
     getDocHandle(id) {
       return docHandles.get(id);
+    },
+    listDocIds() {
+      return Array.from(docHandles.keys());
     }
   };
 }
@@ -1207,7 +1210,7 @@ ${stderr}`);
   };
 }
 
-// ../../node_modules/.bun/dompurify@3.4.1/node_modules/dompurify/dist/purify.es.mjs
+// ../../../../node_modules/.bun/dompurify@3.4.2/node_modules/dompurify/dist/purify.es.mjs
 var {
   entries,
   setPrototypeOf,
@@ -1493,7 +1496,7 @@ var _createHooksMap = function _createHooksMap2() {
 function createDOMPurify() {
   let window2 = arguments.length > 0 && arguments[0] !== void 0 ? arguments[0] : getGlobal();
   const DOMPurify = (root) => createDOMPurify(root);
-  DOMPurify.version = "3.4.1";
+  DOMPurify.version = "3.4.2";
   DOMPurify.removed = [];
   if (!window2 || !window2.document || window2.document.nodeType !== NODE_TYPE.document || !window2.Element) {
     DOMPurify.isSupported = false;
@@ -2005,10 +2008,10 @@ function createDOMPurify() {
     if (SANITIZE_DOM && (lcName === "id" || lcName === "name") && (value in document2 || value in formElement)) {
       return false;
     }
+    const nameIsPermitted = ALLOWED_ATTR[lcName] || EXTRA_ELEMENT_HANDLING.attributeCheck instanceof Function && EXTRA_ELEMENT_HANDLING.attributeCheck(lcName, lcTag);
     if (ALLOW_DATA_ATTR && !FORBID_ATTR[lcName] && regExpTest(DATA_ATTR2, lcName)) ;
     else if (ALLOW_ARIA_ATTR && regExpTest(ARIA_ATTR2, lcName)) ;
-    else if (EXTRA_ELEMENT_HANDLING.attributeCheck instanceof Function && EXTRA_ELEMENT_HANDLING.attributeCheck(lcName, lcTag)) ;
-    else if (!ALLOWED_ATTR[lcName] || FORBID_ATTR[lcName]) {
+    else if (!nameIsPermitted || FORBID_ATTR[lcName]) {
       if (
         // First condition does a very basic check if a) it's basically a valid custom element tagname AND
         // b) if the tagName passes whatever the user has configured for CUSTOM_ELEMENT_HANDLING.tagNameCheck
@@ -2374,7 +2377,7 @@ function looksLikeAgeEnvelope(bytes) {
   return true;
 }
 
-// node_modules/@noble/ed25519/index.js
+// ../../../../node_modules/.bun/@noble+ed25519@3.1.0/node_modules/@noble/ed25519/index.js
 var ed25519_CURVE = Object.freeze({
   p: 0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffedn,
   n: 0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3edn,
@@ -2846,7 +2849,7 @@ var wNAF = (n) => {
   return { p, f };
 };
 
-// node_modules/@noble/hashes/utils.js
+// ../../../../node_modules/.bun/@noble+hashes@2.2.0/node_modules/@noble/hashes/utils.js
 function isBytes2(a) {
   return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array" && "BYTES_PER_ELEMENT" in a && a.BYTES_PER_ELEMENT === 1;
 }
@@ -2902,7 +2905,7 @@ var oidNist = (suffix) => ({
   oid: Uint8Array.from([6, 9, 96, 134, 72, 1, 101, 3, 4, 2, suffix])
 });
 
-// node_modules/@noble/hashes/_md.js
+// ../../../../node_modules/.bun/@noble+hashes@2.2.0/node_modules/@noble/hashes/_md.js
 var HashMD = class {
   blockLen;
   outputLen;
@@ -3018,7 +3021,7 @@ var SHA512_IV = /* @__PURE__ */ Uint32Array.from([
   327033209
 ]);
 
-// node_modules/@noble/hashes/_u64.js
+// ../../../../node_modules/.bun/@noble+hashes@2.2.0/node_modules/@noble/hashes/_u64.js
 var U32_MASK64 = /* @__PURE__ */ BigInt(2 ** 32 - 1);
 var _32n = /* @__PURE__ */ BigInt(32);
 function fromBig(n, le = false) {
@@ -3053,7 +3056,7 @@ var add4H = (low, Ah, Bh, Ch, Dh) => Ah + Bh + Ch + Dh + (low / 2 ** 32 | 0) | 0
 var add5L = (Al, Bl, Cl, Dl, El) => (Al >>> 0) + (Bl >>> 0) + (Cl >>> 0) + (Dl >>> 0) + (El >>> 0);
 var add5H = (low, Ah, Bh, Ch, Dh, Eh) => Ah + Bh + Ch + Dh + Eh + (low / 2 ** 32 | 0) | 0;
 
-// node_modules/@noble/hashes/sha2.js
+// ../../../../node_modules/.bun/@noble+hashes@2.2.0/node_modules/@noble/hashes/sha2.js
 var K512 = /* @__PURE__ */ (() => split([
   "0x428a2f98d728ae22",
   "0x7137449123ef65cd",
@@ -3433,6 +3436,7 @@ function createWorkbookDataResolver(opts = {}) {
           ciphertext,
           opts.webauthnIdentity
         );
+        void plaintext;
         throw new Error(
           `workbook data ${block.id}: WebAuthn unlock under wasmIsolation is not yet supported. Drop wasmIsolation for blocks that need webauthnIdentity, or pre-decrypt to a server-side X25519 identity.`
         );
@@ -3760,64 +3764,53 @@ function createWorkbookMemoryResolver(opts = {}) {
   };
 }
 
-// packages/runtime/src/loroSidecar.ts
-var loroPromise = null;
-async function loadLoro() {
-  if (!loroPromise) {
-    loroPromise = (async () => {
-      const w = typeof window !== "undefined" ? window : null;
-      if (w && w.__wb_loro) return w.__wb_loro;
-      try {
-        const mod = await import(
-          /* @vite-ignore */
-          "loro-crdt"
-        );
-        return mod;
-      } catch {
-        throw new Error(
-          "wb-doc cells require loro-crdt. In a single-file workbook, import it in your main.js and expose it as `window.__wb_loro = await import('loro-crdt')` before calling mountHtmlWorkbook."
-        );
-      }
-    })();
-  }
-  return loroPromise;
+// packages/runtime/src/yjsHost.ts
+var _Y = globalThis.__wb_yjs;
+if (!_Y) {
+  throw new Error(
+    "workbook runtime: globalThis.__wb_yjs is not set. The host app must assign `globalThis.__wb_yjs = await import('yjs')` BEFORE loading the workbook runtime bundle. See yjsHost.ts for context."
+  );
 }
-function createLoroDispatcher() {
-  const handles = /* @__PURE__ */ new Map();
-  function walkPath(doc, path) {
-    let cur;
-    if (path.root.kind === "map") cur = doc.getMap(path.root.name);
-    else if (path.root.kind === "list") cur = doc.getList(path.root.name);
-    else cur = doc.getText(path.root.name);
-    const steps = path.steps ?? [];
-    for (let i = 0; i < steps.length; i++) {
-      const step = steps[i];
-      if (step.kind === "map") {
-        const m = cur;
-        if (typeof m.get !== "function") {
-          throw new Error(
-            `docMutate: path step ${i} expected Map, got non-Map value`
-          );
-        }
-        cur = m.get(step.key);
-      } else {
-        const l = cur;
-        if (typeof l.get !== "function") {
-          throw new Error(
-            `docMutate: path step ${i} expected List, got non-List value`
-          );
-        }
-        cur = l.get(step.index);
-      }
-      if (cur === null || typeof cur !== "object") {
-        throw new Error(
-          `docMutate: path step ${i} yielded a primitive \u2014 can't descend further`
-        );
-      }
+var Doc = _Y.Doc;
+var Map2 = _Y.Map;
+var Array2 = _Y.Array;
+var Text = _Y.Text;
+var XmlElement = _Y.XmlElement;
+var XmlFragment = _Y.XmlFragment;
+var XmlText = _Y.XmlText;
+var encodeStateAsUpdate = _Y.encodeStateAsUpdate;
+var applyUpdate = _Y.applyUpdate;
+var encodeStateVector = _Y.encodeStateVector;
+var mergeUpdates = _Y.mergeUpdates;
+var diffUpdate = _Y.diffUpdate;
+var transact = _Y.transact;
+
+// packages/runtime/src/yjsSidecar.ts
+function walkPath(doc, path) {
+  let cur;
+  if (path.root.kind === "map") cur = doc.getMap(path.root.name);
+  else if (path.root.kind === "list") cur = doc.getArray(path.root.name);
+  else cur = doc.getText(path.root.name);
+  const steps = path.steps ?? [];
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    if (step.kind === "map") {
+      const m = cur;
+      cur = m.get(step.key);
+    } else {
+      const l = cur;
+      cur = l.get(step.index);
     }
-    return cur;
+    if (cur === null || typeof cur !== "object") {
+      throw new Error(
+        `docMutate: path step ${i} yielded a primitive \u2014 can't descend further`
+      );
+    }
   }
-  function applyOp(doc, op) {
+  return cur;
+}
+function applyOp(doc, op) {
+  doc.transact(() => {
     const target = walkPath(doc, op.target);
     switch (op.kind) {
       case "map_set":
@@ -3827,10 +3820,10 @@ function createLoroDispatcher() {
         target.delete(op.key);
         return;
       case "list_push":
-        target.push(op.value);
+        target.push([op.value]);
         return;
       case "list_insert":
-        target.insert(op.index, op.value);
+        target.insert(op.index, [op.value]);
         return;
       case "list_delete":
         target.delete(op.index, op.count);
@@ -3842,27 +3835,31 @@ function createLoroDispatcher() {
         target.delete(op.index, op.count);
         return;
     }
-  }
-  function wrapHandle(doc) {
-    return {
-      toJSON: () => doc.toJSON(),
-      exportSnapshot: () => doc.export({ mode: "snapshot" }),
-      mutate(ops) {
-        for (const op of ops) applyOp(doc, op);
-        doc.commit();
-        return doc.export({ mode: "snapshot" });
-      },
-      inner: () => doc
-    };
-  }
+  });
+}
+function wrapHandle(doc) {
+  return {
+    toJSON: () => doc.toJSON(),
+    exportSnapshot: () => encodeStateAsUpdate(doc),
+    mutate(ops) {
+      for (const op of ops) applyOp(doc, op);
+      return encodeStateAsUpdate(doc);
+    },
+    inner: () => doc,
+    // Surface the Y.Doc directly so the SDK bootstrap can pick it up
+    // without going through the legacy `inner()` LoroDoc cast.
+    doc
+  };
+}
+function createYjsDispatcher() {
+  const handles = /* @__PURE__ */ new Map();
   return {
     async load({ id, bytes, force }) {
       const existing = handles.get(id);
       if (existing && !force) return existing;
-      const loro = await loadLoro();
-      const doc = new loro.LoroDoc();
+      const doc = new Doc();
       if (bytes && bytes.length > 0) {
-        doc.import(bytes);
+        applyUpdate(doc, bytes);
       }
       const handle = wrapHandle(doc);
       handles.set(id, handle);
@@ -3872,6 +3869,12 @@ function createLoroDispatcher() {
       return handles.get(id);
     },
     dispose() {
+      for (const h2 of handles.values()) {
+        try {
+          h2.doc.destroy();
+        } catch {
+        }
+      }
       handles.clear();
     }
   };
@@ -3905,7 +3908,7 @@ function decodeBase643(b64) {
 function createWorkbookDocResolver(opts = {}) {
   const allow = opts.allowedHosts === null ? null : opts.allowedHosts ?? [];
   const fetchBytes = opts.fetchBytes ?? defaultFetchBytes3;
-  const loro = opts.loroDispatcher ?? createLoroDispatcher();
+  const yjs = opts.yjsDispatcher ?? createYjsDispatcher();
   const cache = /* @__PURE__ */ new Map();
   async function fetchExternal(src, expectedSha, declaredBytes) {
     if (allow !== null && !hostAllowed3(src, allow)) {
@@ -3949,8 +3952,8 @@ function createWorkbookDocResolver(opts = {}) {
       );
     }
     let handle;
-    if (block.format === "loro") {
-      handle = await loro.load({ id: block.id, bytes });
+    if (block.format === "yjs") {
+      handle = await yjs.load({ id: block.id, bytes });
     } else {
       throw new Error(`unsupported wb-doc format: ${block.format}`);
     }
@@ -3968,7 +3971,7 @@ function createWorkbookDocResolver(opts = {}) {
     },
     clear() {
       cache.clear();
-      loro.dispose();
+      yjs.dispose();
     }
   };
 }
@@ -4028,7 +4031,7 @@ var MAX_AGGREGATE_INLINE_BYTES = 25 * 1024 * 1024;
 var MAX_EXTERNAL_DECLARED_BYTES = 500 * 1024 * 1024;
 var MAX_MEMORY_BLOCKS = 16;
 var MAX_DOC_BLOCKS = 8;
-var ALLOWED_DOC_FORMATS = /* @__PURE__ */ new Set(["loro"]);
+var ALLOWED_DOC_FORMATS = /* @__PURE__ */ new Set(["yjs"]);
 var MAX_HISTORY_BLOCKS = 2;
 var ALLOWED_HISTORY_FORMATS = /* @__PURE__ */ new Set(["prolly-v1"]);
 function clipString(raw, maxBytes) {
@@ -4205,8 +4208,6 @@ function parseWorkbookHtml(root) {
     if (!formatAttr || !ALLOWED_DOC_FORMATS.has(formatAttr)) continue;
     const sha256Attr = (el.getAttribute("sha256") ?? "").toLowerCase();
     const sha256 = VALID_SHA256.test(sha256Attr) ? sha256Attr : null;
-    const horizonAttr = Number(el.getAttribute("history-horizon"));
-    const historyHorizon = Number.isFinite(horizonAttr) && horizonAttr >= 0 ? horizonAttr : void 0;
     const srcAttr = el.getAttribute("src");
     const encoding = (el.getAttribute("encoding") ?? "").toLowerCase();
     const rawText = el.textContent ?? "";
@@ -4219,7 +4220,6 @@ function parseWorkbookHtml(root) {
       entry = {
         id,
         format: formatAttr,
-        historyHorizon,
         source: { kind: "external", src: srcAttr, sha256, bytes }
       };
     } else if (inlineBase64) {
@@ -4231,14 +4231,12 @@ function parseWorkbookHtml(root) {
       entry = {
         id,
         format: formatAttr,
-        historyHorizon,
         source: { kind: "inline-base64", base64: inlineBase64, sha256 }
       };
     } else {
       entry = {
         id,
         format: formatAttr,
-        historyHorizon,
         source: { kind: "empty" }
       };
     }
@@ -5072,7 +5070,7 @@ export {
 /*! Bundled license information:
 
 dompurify/dist/purify.es.mjs:
-  (*! @license DOMPurify 3.4.1 | (c) Cure53 and other contributors | Released under the Apache license 2.0 and Mozilla Public License 2.0 | github.com/cure53/DOMPurify/blob/3.4.1/LICENSE *)
+  (*! @license DOMPurify 3.4.2 | (c) Cure53 and other contributors | Released under the Apache license 2.0 and Mozilla Public License 2.0 | github.com/cure53/DOMPurify/blob/3.4.2/LICENSE *)
 
 @noble/ed25519/index.js:
   (*! noble-ed25519 - MIT License (c) 2019 Paul Miller (paulmillr.com) *)
