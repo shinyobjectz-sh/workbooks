@@ -38,8 +38,9 @@ export interface NegotiateResult {
 export async function negotiate(opts: NegotiateOptions): Promise<NegotiateResult> {
   const allowPwa = opts.allowPwa !== false;
 
-  // T1: Localhost runner (polyglot APE binary). Probe /_runner/info on
-  // the current origin. Highest priority — silent autosave, no prompts.
+  // T1: Localhost runner (workbooksd). Detected when /health responds
+  // and the page is loaded under /wb/<token>/. Highest priority —
+  // silent autosave, no permission prompts, atomic file rewrite.
   {
     const probe = await LocalhostRunnerTransport.detect();
     if (probe.available) {
@@ -48,7 +49,7 @@ export async function negotiate(opts: NegotiateOptions): Promise<NegotiateResult
         await t1.prepare();
         return {
           transport: t1,
-          reasoning: `T1: workbook runner detected (${probe.info?.runner}); silent autosave via PUT /save`,
+          reasoning: `T1: workbooksd detected (token=${probe.info?.token.slice(0, 8)}…); silent autosave via PUT /wb/<token>/save`,
         };
       } catch (e) {
         // fall through to next tier
