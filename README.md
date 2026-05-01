@@ -8,6 +8,14 @@
 .workbook.html = self-contained HTML + WebAssembly runtime + your code
 ```
 
+**Small enough to email.** A full single-file SPA — chat-on-left, video
+editor with sandboxed preview and parsed timeline, plugin host, CRDT
+state, Cmd+S save-in-place — ships at **~800 KB**. The build wraps the
+inlined runtime in a `DecompressionStream` shim so the artifact stays
+tiny on disk while still carrying every byte it needs to run from
+`file://`. Pay-as-you-go feature gates: notebooks that need Polars +
+Plotters + Candle + Linfa land at ~3–5 MB; apps that don't pay nothing.
+
 Notebooks. Documents. Full apps. All expressed as a single canonical
 format. Author it any way you want — hand-written HTML, a build pipeline
 with components, a framework like Svelte. Run it from `file://`, a USB
@@ -100,6 +108,7 @@ knows how to execute itself, anywhere, today and in fifteen years.
 | **Agents** | Bolted-on chat panel calling a hosted API | Typed `LlmService` proto; agents are first-class cells; tools are sibling cells |
 | **Extensibility** | Plugin = patch the host app | `registerWorkbookCell(language, impl)` — any developer ships a new cell type as a JS module; HTML authors use it as `<wb-cell language="my-thing">` |
 | **Apps** | Notebook-shaped or nothing | Same format ships full SPAs — `examples/chat-app/` is a multi-mode chat agent in a single HTML file; `examples/svelte-app/` is a multi-page Svelte app built via `@work.books/cli` |
+| **Size** | Pyodide ~30 MB; Streamlit / hosted-only | App-shape SPA at ~800 KB (color.wave); notebook with Polars+Candle+Plotters at ~3–5 MB. Per-shape feature gates + `DecompressionStream` sandwich, both default-on |
 | **License** | Vendor-controlled | Apache-2.0; format and reference implementations both open source |
 
 Mozilla AI's [wasm-agents-blueprint](https://github.com/mozilla-ai/wasm-agents-blueprint)
@@ -483,6 +492,8 @@ Shipped today (October 2026):
 - ✅ Streaming chat UI grounded on cell outputs
 - ✅ Plugin API for custom cell languages
 - ✅ Portable `.workbook.html` self-contained export
+- ✅ Per-shape feature gates — app-tier WASM at 144 KB, full-tier at 16 MB; you only pay for what your workbook references
+- ✅ `DecompressionStream` sandwich — gzip/brotli wraps the inlined runtime so the on-disk file stays small without losing the run-anywhere promise
 - ✅ Cross-workbook composition + lockfile
 - ✅ Model artifact cache (IndexedDB, content-addressed)
 - ✅ Run diff (CSV row-level / text / image / table)
