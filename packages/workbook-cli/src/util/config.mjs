@@ -156,6 +156,18 @@ export async function loadConfig(projectDir) {
     }
   }
 
+  // Wasm variant — picks which pre-built slice of runtime-wasm to
+  // inline. SPA-shape workbooks save megabytes by opting into a
+  // smaller variant; data-app workbooks (sql/ML) need the default.
+  // See packages/workbook-cli/src/util/runtime.mjs `variantToPkgDir`.
+  const VALID_WASM_VARIANTS = new Set(["default", "minimal", "app"]);
+  const wasmVariant = cfg.wasmVariant ?? "default";
+  if (!VALID_WASM_VARIANTS.has(wasmVariant)) {
+    throw new Error(
+      `workbook.config: 'wasmVariant' must be one of: ${[...VALID_WASM_VARIANTS].join(", ")} (got '${wasmVariant}')`,
+    );
+  }
+
   return {
     root,
     configPath,
@@ -168,6 +180,7 @@ export async function loadConfig(projectDir) {
     env: cfg.env ?? {},
     icons,                      // null means "use the default workbook glyph"
     runtimeFeatures: cfg.runtimeFeatures ?? [],
+    wasmVariant,
     vite: cfg.vite ?? {},
     // Inline assets unless explicitly disabled; --no-wasm flag flips this.
     inlineRuntime: cfg.inlineRuntime ?? true,

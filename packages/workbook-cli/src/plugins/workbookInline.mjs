@@ -278,7 +278,10 @@ export default function workbookInline({ config, runtimeOverride } = {}) {
       // resolved bytes are never used. The downstream `transformIndexHtml`
       // already short-circuits at `inlineRuntime === false`.
       if (config.inlineRuntime === false) return;
-      runtime = await resolveRuntime({ override: runtimeOverride });
+      runtime = await resolveRuntime({
+        override: runtimeOverride,
+        variant: config.wasmVariant,
+      });
     },
 
     /**

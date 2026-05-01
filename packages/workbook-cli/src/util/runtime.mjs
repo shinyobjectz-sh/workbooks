@@ -18,6 +18,37 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 async function exists(p) { try { await fs.access(p); return true; } catch { return false; } }
 
+/** Map a config-level variant name to the pkg directory shipped by
+ *  runtime-wasm. Variants are pre-built slices of the same crate
+ *  with different cargo features turned on, see runtime-wasm/Cargo.toml.
+ *
+ *    "default" / undefined → pkg/         (full ~16 MB; everything)
+ *    "minimal"             → pkg-minimal/ (~888 KB; SQL/Polars off)
+ *    "app"                 → pkg-app/     (~140 KB; SPA-shape only —
+ *                                          no Polars, no Plotters,
+ *                                          no Rhai, no Arrow)
+ *
+ *  Workbooks declare which variant they need in workbook.config.mjs:
+ *    export default { wasmVariant: "app", ... }
+ *  Picking a slice that's missing a feature the workbook actually
+ *  uses surfaces as a runtime error; the cli does not (yet) verify
+ *  variant compatibility against the workbook's wb.* surface usage.
+ */
+function variantToPkgDir(variant) {
+  switch (variant) {
+    case "minimal": return "pkg-minimal";
+    case "app":     return "pkg-app";
+    case "default":
+    case undefined:
+    case null:      return "pkg";
+    default:
+      throw new Error(
+        `unknown wasmVariant=${JSON.stringify(variant)}. ` +
+        `Use "default", "minimal", or "app".`,
+      );
+  }
+}
+
 export async function resolveRuntime(opts = {}) {
   // Walk up from the CLI's own location to find packages/runtime-wasm.
   // CLI lives at packages/workbook-cli/src/util/runtime.mjs → ../../../../packages/runtime-wasm.
@@ -26,19 +57,22 @@ export async function resolveRuntime(opts = {}) {
   candidates.push(path.resolve(HERE, "..", "..", "..", "runtime-wasm"));
   candidates.push(path.resolve(HERE, "..", "..", "..", "..", "packages", "runtime-wasm"));
 
+  const pkgDir = variantToPkgDir(opts.variant);
+
   let runtimeWasm = null;
   for (const c of candidates) {
-    if (await exists(path.join(c, "pkg", "workbook_runtime.js"))) {
+    if (await exists(path.join(c, pkgDir, "workbook_runtime.js"))) {
       runtimeWasm = c; break;
     }
   }
   if (!runtimeWasm) {
-    const tried = candidates.map((c) => `  ${c}`).join("\n");
+    const tried = candidates.map((c) => `  ${c}/${pkgDir}/`).join("\n");
+    const buildHint = pkgDir === "pkg"
+      ? "Build it first: cd packages/runtime-wasm && wasm-pack build --target web --release"
+      : `Build the ${pkgDir} variant: cd packages/runtime-wasm && wasm-pack build --out-dir ${pkgDir} --target web --release --no-default-features <features-for-${opts.variant}>`;
     throw new Error(
-      "could not locate workbook-runtime-wasm pkg/ output. Tried:\n" +
-      tried + "\n" +
-      "Build it first: cd packages/runtime-wasm && wasm-pack build --target web --release\n" +
-      "Or pass --runtime <path>.",
+      `could not locate workbook-runtime-wasm ${pkgDir}/ output. Tried:\n` +
+      tried + "\n" + buildHint + "\nOr pass --runtime <path>.",
     );
   }
 
@@ -49,8 +83,8 @@ export async function resolveRuntime(opts = {}) {
   const examplesRoot = path.resolve(runtimeWasm, "..", "..", "examples");
   const sharedDir = path.join(examplesRoot, "_shared");
   const bundlePath = path.join(examplesRoot, "reactive-cells", "runtime.bundle.js");
-  const bindgenPath = path.join(runtimeWasm, "pkg", "workbook_runtime.js");
-  const wasmPath = path.join(runtimeWasm, "pkg", "workbook_runtime_bg.wasm");
+  const bindgenPath = path.join(runtimeWasm, pkgDir, "workbook_runtime.js");
+  const wasmPath = path.join(runtimeWasm, pkgDir, "workbook_runtime_bg.wasm");
   const designCssPath = path.join(sharedDir, "design.css");
 
   // Validate everything exists.
@@ -62,6 +96,7 @@ export async function resolveRuntime(opts = {}) {
 
   return {
     runtimeWasm,
+    pkgDir,
     bundlePath,
     bindgenPath,
     wasmPath,
