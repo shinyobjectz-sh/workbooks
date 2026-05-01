@@ -15,7 +15,7 @@
 // and route their delta events into commit() automatically.
 
 import type { SubstrateFile, WalOp, Cid } from "./types";
-import { cidOf, opCidInputs } from "./cid";
+import { cidOfSync, opCidInputs } from "./cid";
 
 export interface SubstrateMutator {
   /** Live view of the substrate's data. Mutations through commit()
@@ -61,10 +61,19 @@ export function createMutator(initial: SubstrateFile): SubstrateMutator {
       // or the last seen op's CID otherwise. New target with no snapshot
       // gets a sentinel "blake3-" + zeros — runtime should treat this
       // case as "implicit empty snapshot."
+      //
+      // CRITICAL: read parent_cid, compute new cid, and update
+      // lastCidByTarget all SYNCHRONOUSLY. The CID computation goes
+      // through cidOfSync (no await) so concurrent commit() calls —
+      // which arrive whenever Y.Doc fires multiple updateV2 events in
+      // a tick — don't race on lastCidByTarget. The async commit()
+      // signature is preserved so callers can still await for the
+      // returned op + transport listeners; the body is sync until
+      // post-update.
       const parentCid = lastCidByTarget.get(target)
         ?? "blake3-" + "0".repeat(32);
       const seq = nextSeq++;
-      const cid = await cidOf(opCidInputs(parentCid, target, seq, payload));
+      const cid = cidOfSync(opCidInputs(parentCid, target, seq, payload));
       const op: WalOp = {
         seq,
         target,
