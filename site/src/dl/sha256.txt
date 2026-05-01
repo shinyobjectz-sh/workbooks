@@ -1,2 +1,0 @@
-03ff5738ef7aacd2d7876b0e6a9ef8c19b57064738de14db3c13caa9ddd1c4db  workbooksd-x86_64-apple-darwin
-bbca27d6034c2a1c240a6ddfea7616b15aa3e8ede87eae71cd92285093fc38f8  workbooksd-aarch64-apple-darwin

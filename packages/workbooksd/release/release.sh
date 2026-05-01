@@ -31,8 +31,6 @@ TAG="release-workbooksd-v$VERSION"
 HERE=$(cd "$(dirname "$0")" && pwd)
 RUNTIME_DIR=$(cd "$HERE/.." && pwd)
 REPO_ROOT=$(cd "$RUNTIME_DIR/../.." && pwd)
-SITE_DIR="$REPO_ROOT/site"
-DL_DIR="$SITE_DIR/src/dl"
 ENV_FILE="$HOME/.workbooks/notary.env"
 
 if [ ! -f "$ENV_FILE" ]; then
@@ -60,7 +58,6 @@ fi
 # this script reads from / writes to need to be tidy.
 RELEASE_PATHS=(
   packages/workbooksd
-  site
 )
 if ! git -C "$REPO_ROOT" diff-index --quiet HEAD -- "${RELEASE_PATHS[@]}"; then
   echo "Uncommitted changes in release-scoped paths. Commit or stash, then re-run."
@@ -74,7 +71,12 @@ for t in "${TARGETS[@]}"; do
   rustup target add "$t" >/dev/null 2>&1 || true
 done
 
-mkdir -p "$DL_DIR"
+# Stage signed/notarized binaries in a scratch dir — NOT the site tree.
+# The single source of truth is the GitHub Release (created at the end
+# of this script). workbooks.sh's /dl/* paths are CF Pages redirects to
+# https://github.com/<repo>/releases/latest/download/<asset>.
+STAGE_DIR=$(mktemp -d -t workbooksd-release-XXXXXX)
+trap 'rm -rf "$STAGE_DIR"' EXIT
 
 for target in "${TARGETS[@]}"; do
   echo
@@ -106,28 +108,19 @@ for target in "${TARGETS[@]}"; do
   # Bare Mach-O can't be stapled (stapler only works on .app/.dmg/.pkg).
   # Notarization is checked online by Gatekeeper at first launch.
 
-  cp "$bin" "$DL_DIR/workbooksd-$target"
-  chmod +x "$DL_DIR/workbooksd-$target"
-  echo "[release] → $DL_DIR/workbooksd-$target ($(wc -c < "$DL_DIR/workbooksd-$target") bytes)"
+  cp "$bin" "$STAGE_DIR/workbooksd-$target"
+  chmod +x "$STAGE_DIR/workbooksd-$target"
+  echo "[release] → $STAGE_DIR/workbooksd-$target ($(wc -c < "$STAGE_DIR/workbooksd-$target") bytes)"
 done
 
 echo
 echo "[release] generating sha256.txt..."
-( cd "$DL_DIR" && shasum -a 256 workbooksd-* | sort > sha256.txt )
-cat "$DL_DIR/sha256.txt"
+( cd "$STAGE_DIR" && shasum -a 256 workbooksd-* | sort > sha256.txt )
+cat "$STAGE_DIR/sha256.txt"
 
 echo
-echo "[release] committing..."
-cd "$REPO_ROOT"
-git add "$SITE_DIR/src/dl/"
-if git diff --cached --quiet; then
-  echo "  (no binary changes to commit)"
-else
-  git commit -m "release: workbooksd $VERSION (macOS arm64+x86_64, signed + notarized)"
-  git push origin HEAD:"$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)"
-fi
-
 echo "[release] tagging $TAG..."
+cd "$REPO_ROOT"
 if git rev-parse "$TAG" >/dev/null 2>&1; then
   echo "  (tag already exists, skipping)"
 else
@@ -136,19 +129,19 @@ else
 fi
 
 if command -v gh >/dev/null 2>&1; then
-  echo "[release] creating GitHub Release..."
+  echo "[release] creating GitHub Release (single source of truth)..."
   if gh release view "$TAG" >/dev/null 2>&1; then
     echo "  (release exists; uploading any new files)"
-    gh release upload "$TAG" "$DL_DIR"/workbooksd-* "$DL_DIR/sha256.txt" --clobber
+    gh release upload "$TAG" "$STAGE_DIR"/workbooksd-* "$STAGE_DIR/sha256.txt" --clobber
   else
     gh release create "$TAG" \
       --title "workbooksd $VERSION" \
       --notes "Locally signed + notarized macOS binaries (Apple Developer ID).
 
-SHA-256 manifest: \`/dl/sha256.txt\` on workbooks.sh.
+SHA-256 manifest: \`/dl/sha256.txt\` on workbooks.sh — redirects here.
 
 Linux + Windows binaries: cut a \`workbooksd-v$VERSION\` tag (no \`release-\` prefix) to trigger CI builds via .github/workflows/workbooksd-release.yml." \
-      "$DL_DIR"/workbooksd-* "$DL_DIR/sha256.txt"
+      "$STAGE_DIR"/workbooksd-* "$STAGE_DIR/sha256.txt"
   fi
 else
   echo "[release] gh CLI not installed; skipping GitHub Release creation"
@@ -157,5 +150,10 @@ fi
 
 echo
 echo "[release] done."
-echo "  Live: https://workbooks.sh/dl/"
-echo "  Tag : $TAG"
+echo "  Release   : https://github.com/shinyobjectz-sh/workbooks/releases/tag/$TAG"
+echo "  Live (via workbooks.sh redirect):"
+echo "    https://workbooks.sh/dl/workbooksd-aarch64-apple-darwin"
+echo "    https://workbooks.sh/dl/workbooksd-x86_64-apple-darwin"
+echo "    https://workbooks.sh/dl/sha256.txt"
+echo
+echo "  Lander: \`bun run --cwd site deploy\` if you want to push site changes."
