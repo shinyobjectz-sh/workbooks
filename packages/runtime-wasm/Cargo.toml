@@ -32,21 +32,35 @@ path = "src/lib.rs"
 # Polars carries a wasm32-friendly feature subset (no parquet/dtype-full,
 # which need lz4-sys / zstd-sys C deps that themselves need a wasi sysroot).
 # Add `polars-parquet` later once we ship a wasi-sdk story.
-default = ["polars-frames", "charts", "rhai-glue"]
+default = ["polars-frames", "charts", "rhai-glue", "crypto", "arrow", "cell-outputs", "history-prolly"]
+
+# Phase 3 (core-0or.3) — opt-out features for code that used to be
+# always-on. App-shape workbooks (color.wave) compile with these
+# disabled to drop crypto / arrow / cell-output / history weight.
+crypto = ["dep:age"]
+# `arrow` here gates ONLY the local arrow_json.rs module; the arrow
+# crate itself stays in the dependency tree because polars-frames pulls
+# it transitively. So this saves the wrapper code but not the arrow
+# crate's bytes — material only when polars-frames is also off.
+arrow = []
+cell-outputs = []
+# Prolly Tree primitive for <wb-history>. Color.wave uses it for the
+# composition edit chain; data-app-shape workbooks may not.
+history-prolly = []
 
 # Data layer (Rust-bundled — currently only Polars). SQLite is JS-side
 # via @sqlite.org/sqlite-wasm, wired through the runtime bridge, not
 # this crate.
-polars-frames = ["dep:polars"]
+polars-frames = ["dep:polars", "cell-outputs"]
 
 # Visualization
-charts = ["dep:plotters"]
+charts = ["dep:plotters", "cell-outputs"]
 
 # Scripting glue
-rhai-glue = ["dep:rhai"]
+rhai-glue = ["dep:rhai", "cell-outputs"]
 
 # ML inference (Hugging Face's Rust ML framework)
-candle = ["dep:candle-core", "dep:candle-nn"]
+candle = ["dep:candle-core", "dep:candle-nn", "cell-outputs"]
 
 # Pre-built model architectures (BERT, DistilBERT, etc.) + tokenizer.
 # Enables real model inference on top of the bare candle feature.
@@ -59,7 +73,7 @@ embeddings = ["candle", "dep:candle-transformers", "dep:tokenizers"]
 onnx = ["candle", "dep:candle-onnx", "dep:image", "dep:prost"]
 
 # Classical ML (sklearn equivalent)
-linfa = ["dep:linfa", "dep:linfa-trees", "dep:linfa-clustering", "dep:linfa-linear"]
+linfa = ["dep:linfa", "dep:linfa-trees", "dep:linfa-clustering", "dep:linfa-linear", "cell-outputs"]
 
 # Training with WebGPU backend (moderate models only)
 burn = ["dep:burn"]
@@ -144,7 +158,7 @@ candle-onnx = { version = "0.10", default-features = false, optional = true }
 prost = { version = "0.14", optional = true }
 # Content-addressed hashing for the Prolly Tree primitive (<wb-history>).
 sha2 = { version = "0.10", default-features = false }
-age = { version = "0.11.3", default-features = false }
+age = { version = "0.11.3", default-features = false, optional = true }
 
 [profile.release]
 # Optimize for size first, speed second — bundle size is critical for browser load.

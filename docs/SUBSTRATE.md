@@ -85,11 +85,21 @@ Color.wave's `apps/colorwave/src/lib/substrateBackend.svelte.js` is a reference 
 ## Transport tiers
 
 ```
-T2 — PWA-installed FSA       silent autosave (PWA file_handler)
+T1 — Localhost runner        silent autosave (polyglot APE binary)
+T2 — PWA-installed FSA       silent autosave (PWA file_handler) — DEPRECATED
 T3 — Per-session FSA         one click per tab → silent
 T4 — OPFS shadow + download  click "Download" to commit
 T5 — Read-only               nothing works; honest fallback
 ```
+
+T1 is the canonical desktop path: the workbook ships as a polyglot
+binary (see `@work.books/runner`); when launched, the binary spawns
+a localhost server, opens the user's browser, and silently rewrites
+itself on every save. T2 (PWA shell) is deprecated in favor of T1
+because the polyglot path needs no install and no `workbooks.sh`
+infrastructure. T3/T4/T5 remain as graceful degradation for users on
+mobile or unsupported browsers (the HTML version of the workbook
+opens directly in their browser).
 
 The negotiator picks the strongest available. See [`SUBSTRATE_AUTHORING.md`](SUBSTRATE_AUTHORING.md) for transport-specific UX.
 

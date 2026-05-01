@@ -1207,7 +1207,7 @@ ${stderr}`);
   };
 }
 
-// node_modules/dompurify/dist/purify.es.mjs
+// ../../node_modules/.bun/dompurify@3.4.1/node_modules/dompurify/dist/purify.es.mjs
 var {
   entries,
   setPrototypeOf,
