@@ -1,12 +1,13 @@
 /**
  * `wb.value(id, opts)` — single object/scalar with last-write-wins.
  *
- * Backed by a LoroMap with one well-known key ("v"). Why LoroMap over
- * a single-element LoroList: LoroMap's set/delete semantics are
- * cleaner for "replace this whole value" without the list-CRDT's
- * concurrent-insert duplication risk. A LoroList of length 1 would
- * sometimes end up as length 2 after a concurrent fork — LoroMap.set
- * collapses concurrent writes to a single key deterministically.
+ * Backed by a Y.Map with one well-known key ("v"). Why Y.Map over a
+ * single-element Y.Array: Y.Map's set/delete semantics are cleaner
+ * for "replace this whole value" without the array-CRDT's concurrent-
+ * insert duplication risk. A Y.Array of length 1 would sometimes end
+ * up as length 2 after a concurrent fork — Y.Map.set collapses
+ * concurrent writes to a single key deterministically (last-write
+ * wins by Lamport clock).
  *
  * Storage shape: JSON-encoded payload under `map.set("v", json)`. The
  * SDK handles encode/decode; authors deal in plain JS values. Default
@@ -14,10 +15,11 @@
  * `initial` option on wb.text but for whole-object scalars).
  *
  * Reactivity: same shape as wb.text — `.value` is a getter,
- * `.subscribe(fn)` fires on commit, fires once with current on register.
+ * `.subscribe(fn)` fires on transaction boundaries, fires once with
+ * current on register.
  */
 
-import { resolveDoc, type LoroDoc, type LoroMap } from "./bootstrap";
+import { resolveDoc, type YDoc, type YMap } from "./bootstrap";
 
 const VALUE_KEY = "v";
 
@@ -35,7 +37,7 @@ export interface WbValue<T = unknown> {
   set(next: T): void;
   /** Subscribe to changes. Returns unsubscribe. Fires once with current. */
   subscribe(fn: (value: T | undefined) => void): () => void;
-  /** Resolves once the underlying LoroDoc is bound. */
+  /** Resolves once the underlying Y.Doc is bound. */
   ready(): Promise<void>;
 }
 
@@ -43,8 +45,8 @@ export function createValue<T = unknown>(
   id: string,
   opts: WbValueOptions<T> = {},
 ): WbValue<T> {
-  let doc: LoroDoc | null = null;
-  let map: LoroMap | null = null;
+  let doc: YDoc | null = null;
+  let map: YMap | null = null;
   let cached: T | undefined = opts.default;
   const listeners = new Set<(value: T | undefined) => void>();
   // Pre-mount writes that fire before the doc resolves. We replay
@@ -53,7 +55,8 @@ export function createValue<T = unknown>(
   // from outside the readyPromise body.
   let pendingWrite: { value: T } | null = null as { value: T } | null;
 
-  function readFromMap(m: LoroMap): T | undefined {
+  function readFromMap(m: YMap): T | undefined {
+    if (!m.has(VALUE_KEY)) return undefined;
     const raw = m.get(VALUE_KEY);
     if (raw === undefined || raw === null) return undefined;
     if (typeof raw !== "string") {
@@ -79,8 +82,9 @@ export function createValue<T = unknown>(
 
   function applySet(next: T) {
     if (!doc || !map) return;
-    map.set(VALUE_KEY, JSON.stringify(next));
-    doc.commit();
+    doc.transact(() => {
+      map!.set(VALUE_KEY, JSON.stringify(next));
+    });
     cached = next;
     notify();
   }
@@ -95,8 +99,9 @@ export function createValue<T = unknown>(
     } else if (opts.default !== undefined && pendingWrite == null) {
       // Materialize the default into the map so subsequent reads see
       // it consistently. This mirrors wb.text's `initial` behavior.
-      map.set(VALUE_KEY, JSON.stringify(opts.default));
-      doc.commit();
+      doc.transact(() => {
+        map!.set(VALUE_KEY, JSON.stringify(opts.default));
+      });
       cached = opts.default;
       notify();
     }
@@ -107,7 +112,7 @@ export function createValue<T = unknown>(
       applySet(queued.value);
     }
 
-    doc.subscribe(() => refresh());
+    doc.on("afterTransaction", () => refresh());
   })();
   readyPromise.catch((e) => {
     console.warn(`wb.value("${id}"): bootstrap failed:`, e);

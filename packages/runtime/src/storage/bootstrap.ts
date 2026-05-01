@@ -1,16 +1,19 @@
 /**
- * Internal Loro doc bootstrap for the wb.* storage SDK.
+ * Internal Yjs doc bootstrap for the wb.* storage SDK.
  *
- * Resolves a raw `LoroDoc` registered by the workbook runtime via the
- * `<wb-doc id="...">` element. Authors don't see this — they interact
- * with `wb.text`, `wb.collection`, `wb.value`. The bootstrap is what
- * keeps those primitives framework-agnostic: each primitive awaits a
- * doc handle here, then operates on it through Loro's container APIs.
+ * Resolves a raw `Y.Doc` registered by the workbook runtime via the
+ * `<wb-doc id="..." format="yjs">` element. Authors don't see this —
+ * they interact with `wb.text`, `wb.collection`, `wb.value`. The
+ * bootstrap is what keeps those primitives framework-agnostic: each
+ * primitive awaits a doc handle here, then operates on it through
+ * Yjs's container APIs (Y.Text / Y.Array / Y.Map).
  *
- * Design rule: every mutation MUST call `doc.commit()` so the host's
- * autosave layer (which subscribes to local commits and writes a
- * snapshot back to IDB / disk) sees the change. The SDK never reaches
- * past the doc to schedule its own persistence.
+ * Design rule: every mutation MUST run inside `doc.transact(() => …)`
+ * so it lands as one logical step. Yjs emits `updateV2` events
+ * automatically at the end of each transaction; the host's autosave
+ * layer (substrate's bindYjsAutoEmit, in colorwave's case) listens
+ * on those events and persists. The SDK never reaches past the doc
+ * to schedule its own persistence.
  *
  * Default doc id: when an author calls `wb.text("composition")` without
  * specifying a doc, the caller must register at least one `<wb-doc>`
@@ -18,53 +21,70 @@
  * `__wbRuntime.listDocIds`. Single-doc workbooks (today's common case)
  * register one doc; the SDK probes a small set of conventional ids
  * before failing. Multi-doc workbooks pass `{ doc: "explicit-id" }`.
+ *
+ * Phase 2 swap: this file used to expose Loro types (LoroDoc,
+ * LoroText, LoroList, LoroMap). The runtime now hosts yjs docs (the
+ * substrate work needs Yjs's incremental update format), so we
+ * re-export Y.Text-shaped / Y.Array-shaped / Y.Map-shaped interfaces
+ * that the storage primitives consume.
  */
 
-// Subset of the loro-crdt JS API we depend on. Mirrors loroSidecar.ts
-// but adds container subscription primitives we need for the reactive
-// layer.
-export interface LoroSubscription {
-  (): void;
+// Type-only mirror of the yjs API surface we depend on. We don't
+// import yjs directly here — the host loads it via __wb_yjs and the
+// runtime hands us a raw Y.Doc through __wbRuntime.getDocHandle.
+//
+// These interfaces describe the duck-typed shape the storage layer
+// uses. They're a strict subset of yjs's real types; any extra Yjs
+// methods are still callable at runtime via the cast in resolveDoc.
+
+export interface YObserver {
+  (ev: unknown, transaction?: unknown): void;
 }
-export interface LoroEvent {
-  by?: "local" | "import" | "checkout";
-  origin?: string;
-  events?: unknown;
-}
-export interface LoroText {
+export interface YText {
   insert(index: number, text: string): void;
-  delete(index: number, count: number): void;
+  delete(index: number, length: number): void;
   toString(): string;
-  subscribe?(cb: (ev: LoroEvent) => void): LoroSubscription;
+  observe(cb: YObserver): void;
+  unobserve?(cb: YObserver): void;
 }
-export interface LoroList {
-  push(value: unknown): void;
-  insert(index: number, value: unknown): void;
-  delete(index: number, count: number): void;
+export interface YArray {
+  push(items: unknown[]): void;
+  insert(index: number, items: unknown[]): void;
+  delete(index: number, length: number): void;
   get(index: number): unknown;
   toArray(): unknown[];
   readonly length: number;
-  subscribe?(cb: (ev: LoroEvent) => void): LoroSubscription;
+  observe(cb: YObserver): void;
 }
-export interface LoroMap {
+export interface YMap {
   set(key: string, value: unknown): void;
   delete(key: string): void;
   get(key: string): unknown;
-  subscribe?(cb: (ev: LoroEvent) => void): LoroSubscription;
-}
-export interface LoroDoc {
-  getText(name: string): LoroText;
-  getList(name: string): LoroList;
-  getMap(name: string): LoroMap;
-  commit(): void;
-  subscribe(cb: (ev: LoroEvent) => void): LoroSubscription;
+  has(key: string): boolean;
+  observe(cb: YObserver): void;
 }
 
-interface LoroDocHandle {
-  inner(): LoroDoc;
+/** The yjs Doc methods we touch. The "any" inside transact comes
+ *  from yjs's own typing — we keep it generic so consumers can
+ *  return values from atomic blocks. */
+export interface YDoc {
+  getText(name: string): YText;
+  getArray(name: string): YArray;
+  getMap(name: string): YMap;
+  transact<T>(fn: () => T, origin?: unknown): T;
+  on(event: "updateV2" | "update" | "afterTransaction", cb: (...args: unknown[]) => void): void;
+  off(event: "updateV2" | "update" | "afterTransaction", cb: (...args: unknown[]) => void): void;
+}
+
+interface YDocHandle {
+  /** The wrapped Y.Doc. Yjs handles also expose `.doc` directly,
+   *  matching the Loro shape of `.inner()` returning the engine's
+   *  native doc type. */
+  inner?(): YDoc;
+  doc?: YDoc;
 }
 interface RuntimeApi {
-  getDocHandle?: (id: string) => LoroDocHandle | undefined;
+  getDocHandle?: (id: string) => YDocHandle | undefined;
   /** Optional — runtime may expose registered ids; not relied on. */
   listDocIds?: () => string[];
 }
@@ -73,8 +93,8 @@ const POLL_TIMEOUT_MS = 10_000;
 const POLL_INTERVAL_MS = 25;
 
 // Cache resolved docs by id so repeated wb.text("composition") calls
-// from across the codebase share one LoroDoc reference.
-const docCache = new Map<string, Promise<LoroDoc>>();
+// from across the codebase share one Y.Doc reference.
+const docCache = new Map<string, Promise<YDoc>>();
 
 function getRuntime(): RuntimeApi | null {
   if (typeof window === "undefined") return null;
@@ -96,8 +116,24 @@ function findFirstDocId(rt: RuntimeApi): string | null {
   return null;
 }
 
+/** Pull the raw Y.Doc out of a runtime handle. Yjs sidecar wraps it
+ *  the same way Loro does — `.inner()` is the canonical accessor —
+ *  but we accept `.doc` too because color.wave's substrate backend
+ *  also peeks at `handle.doc` directly. */
+function unwrap(handle: YDocHandle | undefined): YDoc | null {
+  if (!handle) return null;
+  if (typeof handle.inner === "function") {
+    try {
+      const inner = handle.inner();
+      if (inner) return inner;
+    } catch { /* fall through */ }
+  }
+  if (handle.doc) return handle.doc;
+  return null;
+}
+
 /**
- * Resolve a `LoroDoc` for the given doc id. Pass `null` to resolve
+ * Resolve a `Y.Doc` for the given doc id. Pass `null` to resolve
  * "the default doc" — the first one registered by the runtime
  * (introspected via listDocIds when available).
  *
@@ -105,7 +141,7 @@ function findFirstDocId(rt: RuntimeApi): string | null {
  * Polls `window.__wbRuntime.getDocHandle` so callers that fire BEFORE
  * `mountHtmlWorkbook` finishes don't drop their requests on the floor.
  */
-export function resolveDoc(docId: string | null = null): Promise<LoroDoc> {
+export function resolveDoc(docId: string | null = null): Promise<YDoc> {
   const cacheKey = docId ?? "__default__";
   const cached = docCache.get(cacheKey);
   if (cached) return cached;
@@ -115,14 +151,11 @@ export function resolveDoc(docId: string | null = null): Promise<LoroDoc> {
     while (Date.now() - start < POLL_TIMEOUT_MS) {
       const rt = getRuntime();
       if (rt && typeof rt.getDocHandle === "function") {
-        // Resolve the actual id we'll fetch a handle for.
         const id = docId ?? findFirstDocId(rt);
-
         if (id != null) {
           const handle = rt.getDocHandle(id);
-          if (handle && typeof handle.inner === "function") {
-            return handle.inner();
-          }
+          const doc = unwrap(handle);
+          if (doc) return doc;
         }
       }
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
@@ -131,7 +164,7 @@ export function resolveDoc(docId: string | null = null): Promise<LoroDoc> {
     throw new Error(
       `wb.* storage: timed out (${POLL_TIMEOUT_MS}ms) waiting for ` +
       `<wb-doc${docId ? ` id="${docId}"` : ""}> to register. Make sure ` +
-      `your HTML contains a <wb-workbook><wb-doc format="loro" /></wb-workbook> ` +
+      `your HTML contains a <wb-workbook><wb-doc format="yjs" /></wb-workbook> ` +
       `and that mountHtmlWorkbook(...) has been called.`,
     );
   })();
@@ -145,7 +178,7 @@ export function resolveDoc(docId: string | null = null): Promise<LoroDoc> {
  * Test-only: synchronously inject a doc handle. Used by unit tests
  * that don't run the full mount path.
  */
-export function __setTestDoc(id: string | null, doc: LoroDoc): void {
+export function __setTestDoc(id: string | null, doc: YDoc): void {
   const cacheKey = id ?? "__default__";
   docCache.set(cacheKey, Promise.resolve(doc));
 }

@@ -1,17 +1,22 @@
 #!/bin/bash
-# Build workbook polyglot binary (or three-platform artifact set) from
-# a workbook .html payload.
+# Build a single-file workbook polyglot binary from a workbook .html
+# payload.
 #
 # Usage:
 #   build.sh <input.html> <output-dir> [--name <basename>]
 #
-# Default produces three artifacts in <output-dir>:
-#   <name>-mac.zip      Mac Finder-friendly .app bundle
-#   <name>-win.exe      Windows-runnable polyglot
-#   <name>-linux        Bare polyglot (chmod +x and run)
+# Produces ONE artifact:
+#   <output-dir>/<name>.com
 #
-# All three contain the same APE binary inside. Differs only in
-# packaging affordances per OS.
+# Same APE polyglot bytes; the .com extension is the universal pivot:
+#   - Windows Explorer treats .com as a native executable (double-click works)
+#   - macOS Finder right-click → Open → "Open Anyway" once per file
+#       (after that, Mac trusts double-click forever)
+#   - Linux: chmod +x && ./<name>.com
+#
+# This deliberately ships ONE file, not per-OS variants. Packaging
+# affordances per OS (.app bundle, etc.) sit behind the global Workbook
+# runner, not in the polyglot itself.
 
 set -euo pipefail
 
@@ -55,89 +60,45 @@ mkdir -p "$(dirname "$STUB")"
 chmod +x "$STUB"
 
 # 2. Append payload + 4-byte BE length to make the polyglot.
-#    Layout: [stub bytes] [HTML payload] [4-byte BE length]
+#    Layout: [APE stub bytes] [HTML payload] [4-byte BE length]
 PAYLOAD_LEN=$(wc -c < "$INPUT_HTML" | tr -d ' ')
-BIN="$HERE/build/$NAME-bin"
-cat "$STUB" "$INPUT_HTML" > "$BIN"
-# Append big-endian 4-byte length.
+OUT_FILE="$OUT_DIR/$NAME.com"
+cat "$STUB" "$INPUT_HTML" > "$OUT_FILE"
 python3 -c "
-import struct, sys
-with open('$BIN', 'ab') as f:
+import struct
+with open('$OUT_FILE', 'ab') as f:
     f.write(struct.pack('>I', $PAYLOAD_LEN))
 "
-chmod +x "$BIN"
+chmod +x "$OUT_FILE"
 
-TOTAL_BYTES=$(wc -c < "$BIN" | tr -d ' ')
+TOTAL_BYTES=$(wc -c < "$OUT_FILE" | tr -d ' ')
 TOTAL_MB=$(awk "BEGIN { printf \"%.2f\", $TOTAL_BYTES / 1024 / 1024 }")
-echo "✓ polyglot built ($TOTAL_MB MB; payload $PAYLOAD_LEN bytes)"
+echo "✓ polyglot built: $OUT_FILE ($TOTAL_MB MB; payload $PAYLOAD_LEN bytes)"
 
-# 3. Per-platform packaging.
-#    Linux: bare binary, just rename.
-cp "$BIN" "$OUT_DIR/$NAME-linux"
-chmod +x "$OUT_DIR/$NAME-linux"
-
-#    Windows: same bytes, just .exe extension so Windows Explorer
-#    double-click works.
-cp "$BIN" "$OUT_DIR/$NAME-win.exe"
-
-#    macOS: wrap in a .app bundle so Finder double-click works without
-#    user gymnastics. Then zip the bundle.
-APP_DIR="$HERE/build/$NAME.app"
-rm -rf "$APP_DIR"
-mkdir -p "$APP_DIR/Contents/MacOS"
-cp "$BIN" "$APP_DIR/Contents/MacOS/$NAME"
-chmod +x "$APP_DIR/Contents/MacOS/$NAME"
-
-cat > "$APP_DIR/Contents/Info.plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleExecutable</key><string>$NAME</string>
-  <key>CFBundleIdentifier</key><string>sh.workbooks.$NAME</string>
-  <key>CFBundleName</key><string>$NAME</string>
-  <key>CFBundleDisplayName</key><string>$NAME</string>
-  <key>CFBundleVersion</key><string>0.1</string>
-  <key>CFBundleShortVersionString</key><string>0.1</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>LSMinimumSystemVersion</key><string>10.13</string>
-  <key>NSHighResolutionCapable</key><true/>
-  <key>LSUIElement</key><false/>
-</dict>
-</plist>
-PLIST
-
-# Zip the .app bundle (preserves exec bits via -X)
-ZIP_OUT="$OUT_DIR/$NAME-mac.zip"
-( cd "$HERE/build" && zip -qr "$ZIP_OUT" "$NAME.app" )
-
-# 4. Optional: code-sign if env vars present.
-if [ -n "${APPLE_DEVELOPER_ID:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
+# 3. Optional code-signing.
+#    macOS: codesign signs the bare binary if APPLE_DEVELOPER_ID set.
+#    Windows: osslsigncode signs the .com (treated as PE on Windows).
+if [ -n "${APPLE_DEVELOPER_ID:-}" ]; then
   if command -v codesign >/dev/null 2>&1; then
-    echo "[sign] macOS: codesign --sign \"$APPLE_DEVELOPER_ID\" $APP_DIR"
-    codesign --force --sign "$APPLE_DEVELOPER_ID" --deep --options runtime "$APP_DIR" || \
-      echo "[sign] codesign failed; ship unsigned" >&2
-    # Re-zip after signing
-    ( cd "$HERE/build" && rm -f "$ZIP_OUT" && zip -qr "$ZIP_OUT" "$NAME.app" )
+    echo "[sign] macOS: codesign --sign \"$APPLE_DEVELOPER_ID\" $OUT_FILE"
+    codesign --force --sign "$APPLE_DEVELOPER_ID" --options runtime "$OUT_FILE" || \
+      echo "[sign] codesign failed; shipping unsigned" >&2
   fi
 fi
 if [ -n "${WIN_CODESIGN_CERT_PATH:-}" ] && [ -n "${WIN_CODESIGN_CERT_PASS:-}" ]; then
   if command -v osslsigncode >/dev/null 2>&1; then
-    echo "[sign] Windows: osslsigncode $OUT_DIR/$NAME-win.exe"
+    echo "[sign] Windows: osslsigncode $OUT_FILE"
     osslsigncode sign \
       -pkcs12 "$WIN_CODESIGN_CERT_PATH" \
       -pass "$WIN_CODESIGN_CERT_PASS" \
-      -h sha256 -in "$OUT_DIR/$NAME-win.exe" -out "$OUT_DIR/$NAME-win.exe.signed" && \
-      mv "$OUT_DIR/$NAME-win.exe.signed" "$OUT_DIR/$NAME-win.exe" || \
-      echo "[sign] osslsigncode failed; ship unsigned" >&2
+      -h sha256 -in "$OUT_FILE" -out "$OUT_FILE.signed" && \
+      mv "$OUT_FILE.signed" "$OUT_FILE" || \
+      echo "[sign] osslsigncode failed; shipping unsigned" >&2
   fi
 fi
 
 echo
-echo "Output: $OUT_DIR/"
-ls -lh "$OUT_DIR" | tail -n +2
-echo
-echo "Distribution paths:"
-echo "  macOS:   download $NAME-mac.zip → unzip → double-click $NAME.app"
-echo "  Windows: download $NAME-win.exe → double-click → SmartScreen → Run anyway"
-echo "  Linux:   download $NAME-linux → chmod +x → ./$NAME-linux"
+echo "Distribution: ship the single file $OUT_FILE."
+echo "  macOS:   right-click → Open → 'Open Anyway' (one-time Gatekeeper)"
+echo "  Windows: double-click (SmartScreen → 'Run anyway' once)"
+echo "  Linux:   chmod +x $NAME.com && ./$NAME.com"

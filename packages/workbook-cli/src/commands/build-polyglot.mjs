@@ -46,7 +46,7 @@ export async function runPolyglotPackage({ outDir, slug }) {
     return;
   }
 
-  process.stdout.write(`[polyglot] wrapping ${slug}.workbook.html → 3-platform binaries\n`);
+  process.stdout.write(`[polyglot] wrapping ${slug}.workbook.html → ${slug}.com\n`);
   await new Promise((resolve, reject) => {
     const child = spawn(BUILD_SH, [htmlPath, outDir, "--name", slug], {
       stdio: "inherit",
@@ -59,18 +59,15 @@ export async function runPolyglotPackage({ outDir, slug }) {
     });
   });
 
-  // Friendly summary.
-  for (const name of [`${slug}-mac.zip`, `${slug}-win.exe`, `${slug}-linux`]) {
-    const p = path.join(outDir, name);
-    if (existsSync(p)) {
-      const stat = await fs.stat(p);
-      const mb = (stat.size / 1024 / 1024).toFixed(2);
-      process.stdout.write(`[polyglot]   ${name}: ${mb} MB\n`);
-    }
+  // Friendly summary — one polyglot file + the HTML mobile fallback.
+  const polyglotPath = path.join(outDir, `${slug}.com`);
+  if (existsSync(polyglotPath)) {
+    const stat = await fs.stat(polyglotPath);
+    const mb = (stat.size / 1024 / 1024).toFixed(2);
+    process.stdout.write(`[polyglot]   ${slug}.com: ${mb} MB (universal — Mac/Win/Linux)\n`);
   }
-  // The original .workbook.html is always preserved in outDir. It's
-  // the mobile-fallback artifact (mobile browsers can't run the
-  // polyglot binary; they open the HTML and use substrate's T3/T4
-  // transports — manual save / download-replace).
+  // The original .workbook.html is always preserved in outDir as the
+  // mobile-fallback artifact (mobile browsers open the HTML and use
+  // substrate's T3/T4 transports for save).
   process.stdout.write(`[polyglot]   ${slug}.workbook.html kept for mobile users (substrate T3/T4 transports)\n`);
 }

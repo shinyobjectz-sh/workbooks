@@ -1,25 +1,27 @@
 /**
  * `wb.collection(id, opts)` — whole-record-replace list keyed by `.id`.
  *
- * Backed by a LoroList of JSON-encoded records. Authors think in terms
+ * Backed by a Y.Array of JSON-encoded records. Authors think in terms
  * of "list of things" — upsert by id, remove by id, find by id. The
  * SDK handles JSON marshaling, dedup-by-id on upsert, and reactive
  * reads.
  *
- * Why JSON-strings inside a list (vs LoroMap-of-Maps):
+ * Why JSON-strings inside an array (vs a Y.Map keyed by id):
  *   - matches the existing color.wave wire format byte-for-byte; no
  *     migration needed when this SDK lands.
- *   - record IDs are author-defined strings; LoroList of JSON strings
- *     gives stable iteration order and trivial replaceAll semantics.
- *   - concurrent forks merge as list-CRDT operations; dedup-on-read
+ *   - record IDs are author-defined strings; a Y.Array of JSON
+ *     strings gives stable iteration order and trivial replaceAll
+ *     semantics.
+ *   - concurrent forks merge as Yjs array operations; dedup-on-read
  *     collapses any duplicate entries that survive a merge.
  *
  * Reactivity: same shape as wb.text — `.list` is a getter (current
  * snapshot, reactive via subscribe), `.subscribe(fn)` fires on every
- * commit. Svelte 5 consumers wrap with `$state` for fine-grained tracking.
+ * transaction. Svelte 5 consumers wrap with `$state` for fine-grained
+ * tracking.
  */
 
-import { resolveDoc, type LoroDoc, type LoroList } from "./bootstrap";
+import { resolveDoc, type YDoc, type YArray } from "./bootstrap";
 
 export interface WbRecord {
   id: string;
@@ -40,12 +42,12 @@ export interface WbCollection<T extends WbRecord = WbRecord> {
   remove(id: string): void;
   /** Lookup by id. Returns null if not found. */
   find(id: string): T | null;
-  /** Replace the entire list in one commit. */
+  /** Replace the entire list in one transaction. */
   replaceAll(records: T[]): void;
   /** Subscribe to list changes. Returns unsubscribe. Fires once with
    *  the current snapshot on registration. */
   subscribe(fn: (list: T[]) => void): () => void;
-  /** Resolves once the underlying LoroDoc is bound. */
+  /** Resolves once the underlying Y.Doc is bound. */
   ready(): Promise<void>;
 }
 
@@ -60,16 +62,16 @@ export function createCollection<T extends WbRecord = WbRecord>(
   id: string,
   opts: WbCollectionOptions = {},
 ): WbCollection<T> {
-  let doc: LoroDoc | null = null;
-  let list: LoroList | null = null;
+  let doc: YDoc | null = null;
+  let arr: YArray | null = null;
   let cached: T[] = [];
   const listeners = new Set<(value: T[]) => void>();
   const pending: PendingOp<T>[] = [];
 
-  function readFromList(l: LoroList): T[] {
+  function readFromArr(a: YArray): T[] {
     const out: T[] = [];
     const seen = new Map<string, number>();
-    for (const v of l.toArray()) {
+    for (const v of a.toArray()) {
       if (typeof v !== "string") continue;
       try {
         const parsed = JSON.parse(v) as T;
@@ -96,16 +98,23 @@ export function createCollection<T extends WbRecord = WbRecord>(
   };
 
   const refresh = () => {
-    if (!list) return;
-    cached = readFromList(list);
+    if (!arr) return;
+    cached = readFromArr(arr);
     notify();
   };
 
   function rebuild(next: T[]) {
-    if (!doc || !list) return;
-    if (list.length > 0) list.delete(0, list.length);
-    for (const r of next) list.push(JSON.stringify(r));
-    doc.commit();
+    if (!doc || !arr) return;
+    // Atomic clear-and-refill — one transaction, one updateV2 event,
+    // one autosave-pickup. The substrate's bindYjsAutoEmit listens at
+    // the doc level so a single transaction maps to a single WAL
+    // append.
+    doc.transact(() => {
+      if (arr!.length > 0) arr!.delete(0, arr!.length);
+      if (next.length > 0) {
+        arr!.push(next.map((r) => JSON.stringify(r)));
+      }
+    });
     cached = next;
     notify();
   }
@@ -134,8 +143,8 @@ export function createCollection<T extends WbRecord = WbRecord>(
 
   const readyPromise = (async () => {
     doc = await resolveDoc(opts.doc ?? null);
-    list = doc.getList(id);
-    const hydrated = readFromList(list);
+    arr = doc.getArray(id);
+    const hydrated = readFromArr(arr);
 
     // First-fire post-hydration: emit the loaded snapshot to any
     // listeners registered before `ready()` resolved. Skip if nothing
@@ -153,7 +162,7 @@ export function createCollection<T extends WbRecord = WbRecord>(
       else if (op.kind === "replaceAll" && op.records) applyReplaceAll(op.records);
     }
 
-    doc.subscribe(() => refresh());
+    doc.on("afterTransaction", () => refresh());
   })();
   readyPromise.catch((e) => {
     console.warn(`wb.collection("${id}"): bootstrap failed:`, e);
@@ -162,7 +171,7 @@ export function createCollection<T extends WbRecord = WbRecord>(
   return {
     get list() { return cached; },
     upsert(record: T) {
-      if (!doc || !list) {
+      if (!doc || !arr) {
         pending.push({ kind: "upsert", record });
         // Optimistic local update so .find() right after .upsert()
         // returns the new record without waiting for the doc.
@@ -177,7 +186,7 @@ export function createCollection<T extends WbRecord = WbRecord>(
       applyUpsert(record);
     },
     remove(targetId: string) {
-      if (!doc || !list) {
+      if (!doc || !arr) {
         pending.push({ kind: "remove", id: targetId });
         const next = cached.filter((r) => r.id !== targetId);
         if (next.length !== cached.length) {
@@ -192,7 +201,7 @@ export function createCollection<T extends WbRecord = WbRecord>(
       return cached.find((r) => r.id === targetId) ?? null;
     },
     replaceAll(records: T[]) {
-      if (!doc || !list) {
+      if (!doc || !arr) {
         pending.push({ kind: "replaceAll", records: records.slice() });
         cached = records.slice();
         notify();
