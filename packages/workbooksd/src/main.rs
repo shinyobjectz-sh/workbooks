@@ -966,19 +966,25 @@ async fn open_handler(
         }
     }
 
-    // Plaintext branch: sniff `<script id="wb-meta">` to confirm
-    // this HTML is actually a workbook. Filename used to gate this
+    // Plaintext branch: sniff for a workbook marker to confirm this
+    // HTML is actually a workbook. Filename used to gate this
     // (`.workbook.html`), but macOS Finder duplicates rename to
-    // `foo.workbook (1).html` and would lose the suffix — so we
-    // moved the gate from the name to the content. Built workbooks
-    // carry wb-meta from `wb build` onward, so this is the canonical
-    // marker.
-    if ledger::workbook_id_from_save_body(raw.as_bytes()).is_none() {
+    // `foo.workbook (1).html` and lose the recognized suffix — so
+    // we moved the gate from the name to the content.
+    //
+    // Two marker shapes are accepted:
+    //   - `<script id="wb-meta">` — substrate workbooks built via
+    //     packages/workbook-cli (the canonical pipeline).
+    //   - `<meta name="wb-permissions">` — portable workbooks
+    //     produced by app-specific build pipelines (e.g.
+    //     apps/colorwave) that don't use the substrate plugin but
+    //     do declare a permissions policy.
+    if !looks_like_workbook(&raw) {
         return (
             StatusCode::BAD_REQUEST,
-            "not a workbook (no <script id=\"wb-meta\"> found — \
-             plain HTML files aren't supported, build with \
-             `wb build` first)\n",
+            "not a workbook (no wb-meta or wb-permissions marker \
+             found — only HTML files produced by `wb build` or an \
+             app workbook pipeline are supported)\n",
         )
             .into_response();
     }
@@ -2669,6 +2675,22 @@ pub(crate) fn decode_base64(s: &str) -> Result<Vec<u8>, String> {
 }
 
 // ── path / token plumbing ───────────────────────────────────────────
+
+/// Return true if `html` carries a recognizable workbook marker.
+/// Used by the /open handler to gate untrusted HTML — see the
+/// caller for the rationale on why content beats filename.
+///
+/// Accepts both substrate-pipeline workbooks (`<script id="wb-meta">`)
+/// and app-pipeline workbooks (`<meta name="wb-permissions">`).
+/// Cheap byte search; the .html files we care about are bounded
+/// at ~25 MB and the markers live in `<head>`, so a full scan is
+/// fine.
+fn looks_like_workbook(html: &str) -> bool {
+    // Order checked = order most likely to hit early in <head>.
+    html.contains("<meta name=\"wb-permissions\"")
+        || html.contains(r#"<script id="wb-meta""#)
+        || html.contains(r#"<script type="application/json" id="wb-meta""#)
+}
 
 fn validate_workbook_path(raw: &str) -> Result<PathBuf, String> {
     let p = PathBuf::from(raw);

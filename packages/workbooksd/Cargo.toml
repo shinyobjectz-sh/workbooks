@@ -1,6 +1,6 @@
 [package]
 name = "workbooksd"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 description = "Background daemon that serves and saves .workbook.html files for the local browser"
 license = "MIT"
@@ -87,6 +87,20 @@ glob-match = "0.2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# C9.5 — local-credential gate before cached lease open.
+# macOS: LocalAuthentication framework via objc2 bindings. Touch ID /
+# Apple Watch / system password fallback handled by the framework
+# itself; we just call evaluatePolicy + wrap the async completion
+# handler. Defense against the "stolen unlocked laptop with cached
+# lease" threat (THREAT_MODEL §4.1 row 15). Linux + Windows currently
+# return Unsupported — proper impls (polkit, Win32 Hello/WebAuthn)
+# are follow-up work.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSError", "NSString"] }
+objc2-local-authentication = { version = "0.3", features = ["LAContext"] }
+block2 = "0.6"
 
 [profile.release]
 opt-level = "z"
