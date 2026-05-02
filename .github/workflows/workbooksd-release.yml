@@ -53,11 +53,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Intel Mac (x86_64-apple-darwin) was in this matrix but
+          # macos-13 runner availability has been unreliable — every
+          # recent CI run sat queued for >40 min waiting for a runner,
+          # blocking the publish job behind it. Apple Silicon covers
+          # the modern Mac base; Intel Mac users can install via the
+          # universal Workbooks.pkg cut locally through Path A's
+          # release.sh (which uses `lipo` to glue both arches into
+          # one binary).
           - target: aarch64-apple-darwin
             os: macos-14            # native arm64
-            sign: apple
-          - target: x86_64-apple-darwin
-            os: macos-13            # native x86_64
             sign: apple
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
@@ -67,6 +72,7 @@ jobs:
             sign: trusted
             ext: .exe
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
