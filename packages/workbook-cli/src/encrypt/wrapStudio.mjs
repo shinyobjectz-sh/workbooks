@@ -224,16 +224,42 @@ btn.addEventListener("click", () => {
  * outside this function's return value — once registered, the caller
  * should drop it.
  */
+/**
+ * Wrap one or more workbook view payloads into a single studio-v1
+ * envelope.
+ *
+ * Two input shapes accepted (C2 multi-view):
+ *
+ *   1. Single view (legacy / C1 shape):
+ *        wrapStudio({ html: "...", policy, ... })
+ *      Wraps a single view with id="default". Equivalent to passing
+ *      `{ views: { default: html } }`.
+ *
+ *   2. Multi-view (C2):
+ *        wrapStudio({ views: { full: htmlA, redacted: htmlB }, policy, ... })
+ *      Each view is encrypted under its own freshly-generated DEK.
+ *      The policy.views object should enumerate the same view ids
+ *      (one per content variant the author wants to gate
+ *      independently). Recipients unlock only the views their policy
+ *      claims permit; the rest stay encrypted in the payload.
+ *
+ * Per-view ciphertext is concatenated into a single payload blob; the
+ * `wb-views` meta tag carries (offset, len) descriptors so the
+ * daemon / browser fallback can extract each view's bytes.
+ *
+ * Author responsibilities: register each (workbookId, viewId, dek)
+ * tuple with the broker via POST /v1/workbooks/:id/views/:view_id/key
+ * before distributing the sealed file. DEKs never persist outside
+ * this function's return value — drop them after registration.
+ */
 export async function wrapStudio({
   html,
+  views,
   brokerUrl,
   policy,
   title = "Sealed workbook",
   workbookId = newWorkbookId(),
 }) {
-  if (typeof html !== "string" || html.length === 0) {
-    throw new Error("wrapStudio: html must be a non-empty string");
-  }
   if (typeof brokerUrl !== "string" || !brokerUrl.startsWith("https://")) {
     throw new Error("wrapStudio: brokerUrl must be an https:// URL");
   }
@@ -241,29 +267,89 @@ export async function wrapStudio({
     throw new Error("wrapStudio: policy must be an object");
   }
 
+  // Normalize the two input shapes into a single map of viewId →
+  // utf8 bytes. Single-view path stays C1-compatible.
+  let viewMap;
+  if (views !== undefined) {
+    if (typeof views !== "object" || views === null || Array.isArray(views)) {
+      throw new Error("wrapStudio: views must be an object map of viewId → html string");
+    }
+    if (Object.keys(views).length === 0) {
+      throw new Error("wrapStudio: views map cannot be empty");
+    }
+    viewMap = {};
+    for (const [id, body] of Object.entries(views)) {
+      if (typeof body !== "string" || body.length === 0) {
+        throw new Error(`wrapStudio: views.${id} must be a non-empty string`);
+      }
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
+        throw new Error(
+          `wrapStudio: view id ${JSON.stringify(id)} must be 1–64 chars [A-Za-z0-9_-]`,
+        );
+      }
+      viewMap[id] = new TextEncoder().encode(body);
+    }
+  } else {
+    if (typeof html !== "string" || html.length === 0) {
+      throw new Error("wrapStudio: html must be a non-empty string when views is not provided");
+    }
+    viewMap = { default: new TextEncoder().encode(html) };
+  }
+
+  // Cross-check: when the policy enumerates views, the author MUST
+  // provide content for every view listed (or skip the policy.views
+  // listing entirely if all views share the same gating). This catches
+  // the easy mistake of "I declared a `redacted` view in policy but
+  // forgot to provide its content," which would otherwise silently
+  // ship a workbook where the redacted view is missing.
+  if (policy.views && typeof policy.views === "object") {
+    for (const viewId of Object.keys(policy.views)) {
+      if (!(viewId in viewMap)) {
+        throw new Error(
+          `wrapStudio: policy.views.${viewId} declared but no content provided for that view`,
+        );
+      }
+    }
+  }
+
   const policyHash = await hashPolicy(policy);
-  const plaintext = new TextEncoder().encode(html);
+  const viewIds = Object.keys(viewMap);
 
-  // C1: single view, id "default". C2 will iterate over policy.views.
-  const viewId = "default";
-  const { dek, iv, ciphertext, mac } = await encryptView({
-    plaintext,
-    workbookId,
-    viewId,
-    policyHash,
-  });
-
-  const viewsDescriptor = [
-    {
+  // Encrypt each view under its own DEK. We assemble the payload by
+  // concatenating ciphertexts in the order the author passed them;
+  // the descriptor records each view's offset+len so the parser can
+  // slice cleanly without depending on order.
+  const viewsDescriptor = [];
+  const dekRecords = [];
+  const ciphertextChunks = [];
+  let offset = 0;
+  for (const viewId of viewIds) {
+    const plaintext = viewMap[viewId];
+    const { dek, iv, ciphertext, mac } = await encryptView({
+      plaintext,
+      workbookId,
+      viewId,
+      policyHash,
+    });
+    viewsDescriptor.push({
       id: viewId,
       iv: bytesToBase64Url(iv),
-      offset: 0,
+      offset,
       len: ciphertext.length,
       mac: bytesToBase64Url(mac),
-    },
-  ];
+    });
+    dekRecords.push({ id: viewId, dek: bytesToBase64Url(dek) });
+    ciphertextChunks.push(ciphertext);
+    offset += ciphertext.length;
+  }
 
-  const payloadBytes = ciphertext;
+  // Concatenate.
+  const payloadBytes = new Uint8Array(offset);
+  let writePos = 0;
+  for (const chunk of ciphertextChunks) {
+    payloadBytes.set(chunk, writePos);
+    writePos += chunk.length;
+  }
   const payloadB64 = bytesToBase64(payloadBytes);
 
   const out = SHELL.replace(/%%TITLE%%/g, htmlEscape(title))
@@ -277,7 +363,7 @@ export async function wrapStudio({
     html: out,
     workbookId,
     policyHash,
-    views: [{ id: viewId, dek: bytesToBase64Url(dek) }],
+    views: dekRecords,
   };
 }
 
