@@ -1,6 +1,6 @@
 [package]
 name = "workbooksd"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "Background daemon that serves and saves .workbook.html files for the local browser"
 license = "MIT"
@@ -42,7 +42,7 @@ keyring = { version = "3", default-features = false, features = ["apple-native",
 # splices in the keychain-stored Authorization header, returns the
 # response without ever revealing the secret to the page. rustls
 # keeps us off OpenSSL system libs.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "multipart"] }
 # Type-safe secret handling — SecretString doesn't impl Debug/Display
 # (so format! prints "[REDACTED]") and Drop zeroizes the buffer.
 # Defense against secrets leaking via panic backtraces or eprintln!.

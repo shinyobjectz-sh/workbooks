@@ -54,6 +54,12 @@ DATA=""
 DATA_B64=""
 RAW=0
 declare -a HEADERS=()
+# Multipart parts collected as parallel arrays (one entry per --form-*).
+# Combined into a JSON array right before the request is sent.
+declare -a FORM_NAMES=()
+declare -a FORM_VALUES=()
+declare -a FORM_FILES=()
+declare -a FORM_TYPES=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -66,6 +72,28 @@ while [[ $# -gt 0 ]]; do
     --data) DATA="$2"; shift 2 ;;
     --data-file) DATA="$(cat "$2")"; shift 2 ;;
     --data-stdin) DATA="$(cat)"; shift ;;
+    --form-text)
+      # NAME=VALUE — text part. "name=" with no value is allowed.
+      pair="$2"
+      FORM_NAMES+=("${pair%%=*}")
+      FORM_VALUES+=("${pair#*=}")
+      FORM_FILES+=("")
+      FORM_TYPES+=("")
+      shift 2 ;;
+    --form-file)
+      # NAME=PATH[:CONTENT_TYPE] — file part read off disk + b64.
+      pair="$2"
+      name="${pair%%=*}"
+      rhs="${pair#*=}"
+      path="${rhs%%:*}"
+      ctype=""
+      [[ "$rhs" == *:* ]] && ctype="${rhs#*:}"
+      [[ -r "$path" ]] || { echo "wb-fetch: --form-file: cannot read $path" >&2; exit 2; }
+      FORM_NAMES+=("$name")
+      FORM_VALUES+=("")
+      FORM_FILES+=("$path")
+      FORM_TYPES+=("$ctype")
+      shift 2 ;;
     --raw) RAW=1; shift ;;
     -h|--help)
       sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'
@@ -110,11 +138,53 @@ if [[ -n "$SECRET_ID" ]]; then
     "$SECRET_ID" "$AUTH_HEADER" "$AUTH_PREFIX")"
 fi
 
-# Body — utf8 by default; daemon also accepts base64 via body_b64
-# but this v1 script doesn't expose binary uploads (multipart is
-# scheduled separately).
+# Body — three modes, mutually exclusive (multipart wins if any
+# --form-* flag was passed):
+#   1. Multipart — daemon assembles a real multipart/form-data
+#      payload via reqwest::multipart::Form. File parts get the
+#      raw bytes back via the daemon's base64 decode; ContentType
+#      defaults to application/octet-stream when omitted.
+#   2. Plain utf-8 body (--data / --data-file / --data-stdin).
+#   3. None (GET).
 DATA_JSON_FRAGMENT=""
-if [[ -n "$DATA" ]]; then
+if [[ ${#FORM_NAMES[@]} -gt 0 ]]; then
+  # Pass parallel arrays via env vars, separated by ASCII Unit
+  # Separator (\x1f) — survives env (POSIX disallows NUL, not
+  # arbitrary control chars) and won't collide with anything a
+  # real form value contains. Python decodes them and emits a
+  # multipart JSON array. Stays out of nested-heredoc territory
+  # — that path was tripping bash's quoting parser.
+  US=$'\x1f'
+  WB_FORM_NAMES_US=$(IFS="$US"; printf '%s' "${FORM_NAMES[*]}")
+  WB_FORM_VALUES_US=$(IFS="$US"; printf '%s' "${FORM_VALUES[*]}")
+  WB_FORM_FILES_US=$(IFS="$US"; printf '%s' "${FORM_FILES[*]}")
+  WB_FORM_TYPES_US=$(IFS="$US"; printf '%s' "${FORM_TYPES[*]}")
+  export WB_FORM_NAMES_US WB_FORM_VALUES_US WB_FORM_FILES_US WB_FORM_TYPES_US
+  MULTIPART_JSON=$(python3 -c 'import base64, json, os
+US = chr(0x1f)
+def split(name):
+    raw = os.environ.get(name, "")
+    return raw.split(US) if raw else []
+names  = split("WB_FORM_NAMES_US")
+values = split("WB_FORM_VALUES_US")
+files  = split("WB_FORM_FILES_US")
+types  = split("WB_FORM_TYPES_US")
+parts = []
+for i, name in enumerate(names):
+    p = {"name": name}
+    if i < len(files) and files[i]:
+        with open(files[i], "rb") as f:
+            p["content_b64"] = base64.b64encode(f.read()).decode("ascii")
+        p["filename"] = files[i].rsplit("/", 1)[-1]
+    else:
+        p["value"] = values[i] if i < len(values) else ""
+    if i < len(types) and types[i]:
+        p["content_type"] = types[i]
+    parts.append(p)
+print(json.dumps(parts))
+')
+  DATA_JSON_FRAGMENT=",\"multipart\":$MULTIPART_JSON"
+elif [[ -n "$DATA" ]]; then
   DATA_JSON_FRAGMENT=",\"body\":$(printf '%s' "$DATA" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')"
 fi
 

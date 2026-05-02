@@ -1718,6 +1718,37 @@ struct ProxyReq {
     body_b64: bool,
     #[serde(default)]
     auth: Option<ProxyAuth>,
+    /// Optional multipart/form-data body. When present, `body` and
+    /// `body_b64` are ignored — the daemon builds a real multipart
+    /// payload via reqwest::multipart::Form and sets the
+    /// Content-Type with the right boundary automatically. Used by
+    /// flows that upload audio (ElevenLabs voice clone) or images
+    /// (fal.ai img2img) — those APIs reject JSON bodies.
+    #[serde(default)]
+    multipart: Option<Vec<MultipartPart>>,
+}
+
+#[derive(Deserialize)]
+struct MultipartPart {
+    /// Form field name. Required.
+    name: String,
+    /// Text value. Mutually exclusive with `content_b64`. Either one
+    /// must be set per part.
+    #[serde(default)]
+    value: Option<String>,
+    /// Filename for file parts (e.g. "audio.wav"). When present the
+    /// part is sent with a Content-Disposition: form-data; filename=...
+    #[serde(default)]
+    filename: Option<String>,
+    /// Per-part Content-Type, e.g. "audio/wav". Defaults to
+    /// "application/octet-stream" for file parts, "text/plain"
+    /// otherwise.
+    #[serde(default)]
+    content_type: Option<String>,
+    /// Base64-encoded part body. Set instead of `value` for binary
+    /// payloads.
+    #[serde(default)]
+    content_b64: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1885,7 +1916,54 @@ async fn proxy_handler(
         audit_log(&path, "proxy-noauth", None, Some(&upstream_host));
     }
 
-    if let Some(body) = req.body {
+    // Body construction. Multipart wins if present (file uploads to
+    // fal.ai img2img / ElevenLabs voice clone). Then body_b64.
+    // Then plain body. The three are mutually exclusive — caller
+    // shouldn't set more than one but we honor the priority above
+    // without erroring if they do.
+    if let Some(parts) = req.multipart {
+        let mut form = reqwest::multipart::Form::new();
+        for part in parts {
+            let mut p = if let Some(b64) = part.content_b64 {
+                let bytes = match decode_base64(&b64) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            format!("multipart part {:?} content_b64: {e}", part.name),
+                        )
+                            .into_response();
+                    }
+                };
+                reqwest::multipart::Part::bytes(bytes)
+            } else if let Some(v) = part.value {
+                reqwest::multipart::Part::text(v)
+            } else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    format!("multipart part {:?} needs `value` or `content_b64`", part.name),
+                )
+                    .into_response();
+            };
+            if let Some(name) = part.filename {
+                p = p.file_name(name);
+            }
+            if let Some(ct) = part.content_type {
+                match p.mime_str(&ct) {
+                    Ok(np) => p = np,
+                    Err(e) => {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            format!("multipart part {:?} content_type {ct:?}: {e}", part.name),
+                        )
+                            .into_response();
+                    }
+                }
+            }
+            form = form.part(part.name, p);
+        }
+        builder = builder.multipart(form);
+    } else if let Some(body) = req.body {
         if req.body_b64 {
             match decode_base64(&body) {
                 Ok(bytes) => builder = builder.body(bytes),
