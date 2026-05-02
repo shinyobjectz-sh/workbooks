@@ -201,6 +201,52 @@ pub fn for_workbook(workbook_id: &str) -> Option<WorkbookHistory> {
     f.by_id.get(workbook_id).cloned()
 }
 
+/// Compact summary used by the Workbooks Manager's index view.
+/// Drops the full saves[] array (~1KB per save) for an O(1)-per-
+/// workbook payload — the manager fetches this for its list, then
+/// drills into for_workbook() when the user clicks through.
+#[derive(Clone, Debug, Serialize)]
+pub struct WorkbookSummary {
+    pub workbook_id: String,
+    pub first_seen: String,
+    pub last_save: String,
+    pub paths_seen: Vec<String>,
+    pub save_count: usize,
+    /// Most recent save's path. `paths_seen.last()` would be wrong —
+    /// that's the order paths were first observed; this is "where
+    /// the latest content actually lives right now."
+    pub latest_path: Option<String>,
+    /// Most recent save's size in bytes. Lets the UI render
+    /// "23 KB" without a follow-up fetch.
+    pub latest_size: u64,
+    /// Most recent save's content sha. Anchors "this is the head."
+    pub latest_sha: String,
+}
+
+pub fn list_summaries() -> Vec<WorkbookSummary> {
+    let f = load();
+    let mut out: Vec<WorkbookSummary> = f
+        .by_id
+        .into_values()
+        .map(|h| {
+            let last = h.saves.last();
+            WorkbookSummary {
+                workbook_id: h.workbook_id,
+                first_seen: h.first_seen,
+                last_save: h.last_save,
+                paths_seen: h.paths_seen,
+                save_count: h.saves.len(),
+                latest_path: last.map(|s| s.file_path.clone()),
+                latest_size: last.map(|s| s.size).unwrap_or(0),
+                latest_sha: last.map(|s| s.file_sha256.clone()).unwrap_or_default(),
+            }
+        })
+        .collect();
+    // Most recently-touched first. Lexicographic on ISO 8601 = chrono.
+    out.sort_by(|a, b| b.last_save.cmp(&a.last_save));
+    out
+}
+
 fn iso8601_now() -> String {
     // Same formatter as audit_log uses in main.rs. Duplicated here
     // so the ledger module stays self-contained — both call sites

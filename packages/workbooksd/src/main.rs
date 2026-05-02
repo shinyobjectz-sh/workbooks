@@ -1006,9 +1006,14 @@ async fn open_sealed(
 
     audit_log(&path, "broker-auth-begin", None, None);
 
-    let auth = broker_client::run_flow(&broker_url, &env.workbook_id, |url| {
-        spawn_browser(url);
-    })
+    let auth = broker_client::run_flow(
+        &broker_url,
+        &env.workbook_id,
+        &env.policy_hash,
+        |url| {
+            spawn_browser(url);
+        },
+    )
     .await
     .map_err(|e| format!("broker auth: {e}"))?;
 
