@@ -168,6 +168,23 @@ cat > "$APP_DIR/Contents/Info.plist" <<EOF
       <key>LSItemContentTypes</key>
       <array><string>sh.workbooks.workbook</string></array>
     </dict>
+    <!--
+      Second entry: also claim plain HTML at LSHandlerRank=Alternate.
+      Workbooks IDs are content-based (`<script id="wb-meta">`), but
+      macOS routes apps by file extension. This makes Workbooks.app
+      show up in Finder's "Open With" list for any .html file —
+      necessary because Finder duplicates rename `foo.workbook.html`
+      to `foo.workbook (1).html`, losing the recognized suffix.
+      Default-app status stays with the system browser; we just want
+      to be a listed alternative the user can pick.
+    -->
+    <dict>
+      <key>CFBundleTypeName</key><string>HTML Document</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>public.html</string></array>
+    </dict>
   </array>
   <key>UTExportedTypeDeclarations</key>
   <array>

@@ -92,7 +92,6 @@ pub(crate) static BOUND_PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::ne
 pub(crate) fn bound_port() -> u16 {
     *BOUND_PORT.get().expect("daemon listener has not bound yet")
 }
-const WORKBOOK_SUFFIX: &str = ".workbook.html";
 const MAX_SESSIONS: usize = 1000;
 const OPEN_BURST: f64 = 10.0;
 const OPEN_REFILL_PER_MIN: f64 = 10.0;
@@ -965,6 +964,23 @@ async fn open_handler(
                 return (StatusCode::BAD_GATEWAY, msg).into_response();
             }
         }
+    }
+
+    // Plaintext branch: sniff `<script id="wb-meta">` to confirm
+    // this HTML is actually a workbook. Filename used to gate this
+    // (`.workbook.html`), but macOS Finder duplicates rename to
+    // `foo.workbook (1).html` and would lose the suffix — so we
+    // moved the gate from the name to the content. Built workbooks
+    // carry wb-meta from `wb build` onward, so this is the canonical
+    // marker.
+    if ledger::workbook_id_from_save_body(raw.as_bytes()).is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "not a workbook (no <script id=\"wb-meta\"> found — \
+             plain HTML files aren't supported, build with \
+             `wb build` first)\n",
+        )
+            .into_response();
     }
 
     let evicted = state.sessions.lock().await.insert(token.clone(), path);
@@ -2661,8 +2677,17 @@ fn validate_workbook_path(raw: &str) -> Result<PathBuf, String> {
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| "path has no file name".to_string())?;
-    if !name.ends_with(WORKBOOK_SUFFIX) {
-        return Err(format!("not a workbook (must end in {WORKBOOK_SUFFIX})"));
+    // Defense-in-depth: must be HTML by extension. The real
+    // "is this a workbook?" decision happens in open_handler by
+    // sniffing wb-meta from the content — that way macOS-renamed
+    // duplicates like `foo.workbook (1).html` (which lose the
+    // `.workbook.html` suffix during Finder duplication) still
+    // open. Brand-new files coming out of `wb build` get wb-meta
+    // injected by the substrate plugin, so the content check is
+    // the canonical truth.
+    let lower = name.to_ascii_lowercase();
+    if !lower.ends_with(".html") && !lower.ends_with(".htm") {
+        return Err("not an html file".into());
     }
     Ok(abs)
 }

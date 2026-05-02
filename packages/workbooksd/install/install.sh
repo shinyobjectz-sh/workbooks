@@ -196,6 +196,13 @@ install_macos_app() {
         <string>sh.workbooks.workbook</string>
       </array>
     </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>HTML Document</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>public.html</string></array>
+    </dict>
   </array>
   <key>UTExportedTypeDeclarations</key>
   <array>
