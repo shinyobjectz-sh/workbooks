@@ -1246,7 +1246,7 @@ async fn save_workbook(
     if let Some(id) = ledger::workbook_id_from_save_body(&final_body) {
         use sha2::{Digest, Sha256};
         let sha = hex::encode(Sha256::digest(&final_body));
-        if let Err(e) = ledger::record_save(&id, &path, &sha, final_body.len() as u64) {
+        if let Err(e) = ledger::record_save(&id, &path, &sha, final_body.len() as u64, Some(&agent)) {
             eprintln!("[workbooksd] ledger record failed: {e}");
         }
         state.sessions.lock().await.set_workbook_id(&token, id);

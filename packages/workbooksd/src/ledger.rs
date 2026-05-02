@@ -46,6 +46,12 @@ pub struct LedgerEntry {
     pub file_sha256: String,
     /// File size in bytes. Cheap to compute, useful in summaries.
     pub size: u64,
+    /// Who saved this — "claude" / "codex" / "human" / "native" /
+    /// "unknown". Surfaced in the manager so users see at a glance
+    /// who last touched a workbook. Optional for backwards compat
+    /// with pre-`agent` ledger files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -135,6 +141,7 @@ pub fn record_save(
     file_path: &Path,
     file_sha256: &str,
     size: u64,
+    agent: Option<&str>,
 ) -> Result<(), String> {
     let mut f = load();
     let now = iso8601_now();
@@ -168,6 +175,7 @@ pub fn record_save(
             file_path: path_str,
             file_sha256: file_sha256.to_string(),
             size,
+            agent: agent.map(str::to_string),
         });
     }
     if history.saves.len() > MAX_SAVES_PER_WORKBOOK {
@@ -212,24 +220,91 @@ pub struct WorkbookSummary {
     pub last_save: String,
     pub paths_seen: Vec<String>,
     pub save_count: usize,
-    /// Most recent save's path. `paths_seen.last()` would be wrong —
-    /// that's the order paths were first observed; this is "where
-    /// the latest content actually lives right now."
     pub latest_path: Option<String>,
-    /// Most recent save's size in bytes. Lets the UI render
-    /// "23 KB" without a follow-up fetch.
     pub latest_size: u64,
-    /// Most recent save's content sha. Anchors "this is the head."
     pub latest_sha: String,
+    pub latest_agent: Option<String>,
+    /// Set when this workbook's first save sha matches a save in
+    /// some other workbook that predates it — meaning whoever
+    /// started this workbook started from a copy of that one.
+    /// `None` for genuinely-fresh workbooks.
+    pub forked_from: Option<ForkRef>,
+    /// How many other workbooks were spawned from this one (i.e.
+    /// how many workbooks have this workbook in their `forked_from`).
+    pub fork_count: usize,
+}
+
+/// Compact ancestry pointer attached to a forked workbook.
+#[derive(Clone, Debug, Serialize)]
+pub struct ForkRef {
+    pub parent_workbook_id: String,
+    /// Timestamp of the parent's save whose content matched this
+    /// workbook's first save — i.e. the moment of the fork.
+    pub parent_save_ts: String,
+    /// Latest path of the parent — lets the manager show
+    /// "forked from foo.workbook.html" without an extra lookup.
+    pub parent_path: Option<String>,
 }
 
 pub fn list_summaries() -> Vec<WorkbookSummary> {
     let f = load();
+
+    // First pass: build a sha → [(workbook_id, save_ts)] index over
+    // EVERY save in the ledger. This is the substrate fork-detection
+    // runs over: when workbook B's first save sha matches workbook
+    // A's third save sha, B was forked from A at A's third save.
+    // O(total_saves), and total_saves is capped (10k workbooks ×
+    // 2k saves max), so this is fine to run on every list call.
+    let mut sha_index: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    for h in f.by_id.values() {
+        for s in &h.saves {
+            sha_index
+                .entry(s.file_sha256.clone())
+                .or_default()
+                .push((h.workbook_id.clone(), s.ts.clone()));
+        }
+    }
+
+    // Second pass: for each workbook, look up its first save's sha
+    // in the index. Any match in *another* workbook whose save
+    // predates this workbook's first save is a candidate parent.
+    // Pick the most recent qualifying parent save (latest ts ≤
+    // ours) — that's the closest ancestor in time.
+    let latest_path_by_id: HashMap<String, Option<String>> = f
+        .by_id
+        .iter()
+        .map(|(k, h)| (k.clone(), h.saves.last().map(|s| s.file_path.clone())))
+        .collect();
+
+    let mut forked_from: HashMap<String, ForkRef> = HashMap::new();
+    let mut fork_count: HashMap<String, usize> = HashMap::new();
+
+    for h in f.by_id.values() {
+        let Some(first) = h.saves.first() else { continue };
+        let Some(matches) = sha_index.get(&first.file_sha256) else { continue };
+        let parent = matches
+            .iter()
+            .filter(|(wid, ts)| wid != &h.workbook_id && ts.as_str() <= first.ts.as_str())
+            .max_by(|a, b| a.1.cmp(&b.1));
+        if let Some((pid, pts)) = parent {
+            forked_from.insert(
+                h.workbook_id.clone(),
+                ForkRef {
+                    parent_workbook_id: pid.clone(),
+                    parent_save_ts: pts.clone(),
+                    parent_path: latest_path_by_id.get(pid).cloned().flatten(),
+                },
+            );
+            *fork_count.entry(pid.clone()).or_insert(0) += 1;
+        }
+    }
+
     let mut out: Vec<WorkbookSummary> = f
         .by_id
         .into_values()
         .map(|h| {
             let last = h.saves.last();
+            let id = h.workbook_id.clone();
             WorkbookSummary {
                 workbook_id: h.workbook_id,
                 first_seen: h.first_seen,
@@ -239,6 +314,9 @@ pub fn list_summaries() -> Vec<WorkbookSummary> {
                 latest_path: last.map(|s| s.file_path.clone()),
                 latest_size: last.map(|s| s.size).unwrap_or(0),
                 latest_sha: last.map(|s| s.file_sha256.clone()).unwrap_or_default(),
+                latest_agent: last.and_then(|s| s.agent.clone()),
+                forked_from: forked_from.remove(&id),
+                fork_count: fork_count.get(&id).copied().unwrap_or(0),
             }
         })
         .collect();
