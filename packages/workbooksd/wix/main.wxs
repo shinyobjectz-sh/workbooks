@@ -46,9 +46,11 @@
       AllowSameVersionUpgrades='yes'
       DowngradeErrorMessage='A newer version of Workbooks is already installed.' />
 
-    <!-- Per-user install: LocalAppData, no UAC prompt. -->
-    <Property Id='ALLUSERS' Value='' />
-    <Property Id='MSIINSTALLPERUSER' Value='1' />
+    <!-- Per-user install: LocalAppData, no UAC prompt. The
+         <Package InstallScope="perUser"> attribute above is what
+         actually pins ALLUSERS=2 + MSIINSTALLPERUSER=1; setting them
+         here as <Property> would be both redundant and (with empty
+         Value="") rejected by candle.exe (CNDL0006). -->
 
     <!-- Directory layout. LocalAppDataFolder is %LOCALAPPDATA%. -->
     <Directory Id='TARGETDIR' Name='SourceDir'>
