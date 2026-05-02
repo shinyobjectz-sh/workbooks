@@ -266,6 +266,25 @@ PRs that don't touch sealed-workbook code can omit. PRs that touch the broker, t
 
 ---
 
+## 7a. Regression coverage
+
+End-to-end test that exercises every C1 row in §4.1 except OIDC validity (which we trust WorkOS for):
+
+- **`apps/workbooks-broker/test/e2e-c1.test.mjs`** (`npm run test:e2e`)
+  - Seeds two synthetic sessions (alice in policy, bob out).
+  - Author registers workbook, wraps DEK at broker.
+  - Alice POST `/key` → 200 + `sealed_dek`; HPKE-opens the sealed_dek and asserts byte-equal to the original DEK (cross-impl wire-shape pin).
+  - AAD-mismatch open rejected (binds sealed_dek to workbook+view+policy_hash).
+  - Bob POST `/key` → 403 with reason; no key/lease leaked.
+  - Audit log contains: workbook-registered, wrap, lease-issued (alice sub), lease-denied (bob sub).
+
+Skipped here, covered elsewhere:
+- WorkOS OIDC dance — manually validated; unit-test surface lives in WorkOS, not us.
+- Daemon-side envelope decrypt + serve — `packages/workbooksd/src/envelope.rs` tests, including `decrypts_real_wrapstudio_fixture`.
+- Daemon-side HPKE-open — `packages/workbooksd/src/broker_client.rs::tests::unseal_roundtrip_matches_broker_aad_format` and `unseal_with_wrong_aad_fails`.
+
+Run before any merge that touches sealed-workbook code.
+
 ## 8. Maintenance
 
 This doc is updated as part of every C9 ticket. Pattern:
