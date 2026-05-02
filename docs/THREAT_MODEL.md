@@ -140,10 +140,10 @@ Consolidates the multi-party threats from `SECURITY_MODEL_MULTIPARTY.md` and the
 |---|---|---|---|---|
 | 1 | Sealed file stolen in transit (A3, A12) | AES-256-GCM envelope; cleartext only inside policy-allowed daemon process. | ✅ | — |
 | 2 | Authenticated-not-allowed identity requests DEK (A4) | Broker policy eval; deny + audit. | ✅ | core-1fi.1.7 |
-| 3 | Compromised broker logs released DEKs (A9) | **Sealed-box DEK transport** — broker encrypts each DEK to recipient's per-session X25519 transport pubkey before return. Broker holds plaintext only momentarily. | ❌ | **C9.1** (`core-l6n.1`) |
+| 3 | Compromised broker logs released DEKs (A9) | **HPKE-sealed DEK transport** — recipient sends per-flow X25519 transport pubkey on the `/key` request body; broker HPKE-seals each DEK (DHKEM(X25519,HKDF-SHA256) + HKDF-SHA256 + ChaCha20-Poly1305, AAD-bound to workbook+view+policy_hash) before return. Broker holds plaintext DEK only between unwrap-from-D1 and HPKE-seal — never in the response body. | ✅ | C9.1 (closed) |
 | 4 | Compromised broker tries to recover all wrapped DEKs (A9) | KEK lives in a different security domain than broker compute. Today: env var (dev) / wrangler secret (prod intent). **Hardening: enforce wrangler-secret-only path; remove env-var fallback; rotation runbook.** | ⚠ | **C9.3** (`core-l6n.3`) |
 | 5 | Subpoena targets broker (A11) | Broker structurally cannot produce cleartext. Audit log signed + chained. | ✅ | — |
-| 6 | Stolen lease replayed by different recipient | Lease bound to (sub, broker_nonce) via HKDF; daemon verifies on use. | ⚠ (designed; bind-to-transport-pubkey lands with C9.1) | C9.1 |
+| 6 | Stolen lease replayed by different recipient | Lease bound to (sub, broker_nonce) via HKDF; daemon verifies on use. The HPKE seal in row 3 also implicitly binds DEK release to the daemon's transport private key — a stolen lease without that key cannot unwrap any released DEKs. | ✅ | — |
 | 7 | IdP revocation — old recipient still has cached lease | TTL bounds the window (default 1h online, 24h offline grace). Daemon refreshes at 80%. | ⚠ (refresh path lands with C1.9) | core-1fi.1.9 |
 | 8 | Recipient extracts cleartext post-decrypt (A5) | Out of scope. View partitioning (C2) limits exposure; audit log records access. | ✅ accepted | core-1fi.2 |
 | 9 | Tampered envelope claims forged sender / chain (A7) | C2PA chain signed with author's ed25519. **Today: per-machine key with no cross-machine attestation.** **Hardening: broker-pinned author public keys.** | ⚠ | **C9.4** (`core-l6n.4`) |
@@ -183,7 +183,7 @@ Each row maps to a `bd` ticket under `core-l6n`. Filed P0 = blocks production; P
 
 | Ticket | Title | Priority | Blocks |
 |---|---|---|---|
-| `core-l6n.1` | C9.1 Sealed-box DEK transport | **P0** | C1.11 |
+| `core-l6n.1` | C9.1 Sealed-box DEK transport | **P0** | ✅ closed |
 | `core-l6n.2` | C9.2 Constant-time secret compares | P1 | — |
 | `core-l6n.3` | C9.3 Memory-only KEK in production | **P0** | GA |
 | `core-l6n.4` | C9.4 Author key registration + verification | P1 | C8.3 |

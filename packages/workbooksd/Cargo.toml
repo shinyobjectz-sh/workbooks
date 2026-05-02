@@ -54,6 +54,13 @@ zeroize = "1"
 aes-gcm = "0.10"
 # base64 + base64url codecs for envelope payload + DEK transport.
 base64 = "0.22"
+# HPKE (RFC 9180) for sealed-box DEK transport from broker (C9.1).
+# Suite: DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Poly1305.
+# Same suite used by @hpke/core on the broker side. We feed 32 bytes
+# from `getrandom` into HPKE's `derive_keypair` rather than wiring an
+# RNG trait through — sidesteps the rand_core 0.6/0.9 split between
+# hpke 0.13 and the rest of the daemon's tree.
+hpke = "0.13"
 # SHA-256 for the ledger's content fingerprints. Pure Rust, no
 # system OpenSSL.
 sha2 = "0.10"

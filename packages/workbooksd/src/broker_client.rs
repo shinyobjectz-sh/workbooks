@@ -28,11 +28,26 @@
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use hpke::{
+    aead::ChaCha20Poly1305, kdf::HkdfSha256, kem::X25519HkdfSha256, Deserializable, Kem,
+    OpModeR, Serializable,
+};
 use secrecy::{ExposeSecret, SecretSlice, SecretString};
 use serde::Deserialize;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+
+/// HPKE info string. Must match `HPKE_INFO` in
+/// apps/workbooks-broker/src/lib/sealed.ts. Changing this string is a
+/// hard format break — every outstanding sealed_dek becomes
+/// undecryptable, which doubles as a kill switch for hard rotations.
+const HPKE_INFO: &[u8] = b"studio-v1/dek-transport";
+
+/// Encapsulated key size for DHKEM(X25519, HKDF-SHA256) — the X25519
+/// public key, 32 bytes raw. Broker writes (enc || ciphertext) into
+/// sealed_dek; we slice at this offset to recover both halves.
+const X25519_ENC_LEN: usize = 32;
 
 /// How long to wait between opening the browser and receiving the
 /// broker_code on the localhost listener. Five minutes is generous —
@@ -96,9 +111,16 @@ pub struct AuthSuccess {
 /// Run the full broker auth flow for a workbook id. Blocks (async)
 /// until the user signs in, the broker releases keys, and we have a
 /// concrete `AuthSuccess` — or an error / timeout.
+///
+/// `policy_hash` is the value from the envelope's wb-policy-hash meta
+/// tag. The daemon already parsed it during envelope detection; we
+/// thread it here so the HPKE-AEAD AAD can be computed locally to
+/// match what the broker used when sealing each DEK (broker doesn't
+/// re-echo policy_hash in the response — bound implicitly).
 pub async fn run_flow(
     broker_url: &str,
     workbook_id: &str,
+    policy_hash: &str,
     open_browser: impl FnOnce(&str),
 ) -> Result<AuthSuccess, BrokerError> {
     let broker_url = broker_url.trim_end_matches('/').to_string();
@@ -132,22 +154,49 @@ pub async fn run_flow(
     // 5. Exchange broker_code → bearer.
     let exchange = exchange_code(&broker_url, &code).await?;
 
-    // 6. Fetch keys + lease for the workbook.
-    let release = release_keys(&broker_url, &exchange.bearer, workbook_id).await?;
+    // 6. Generate per-flow X25519 keypair for sealed-DEK transport
+    //    (C9.1). The private key never leaves the daemon process; the
+    //    public key goes to the broker on the /key request body. The
+    //    broker HPKE-seals each released DEK to that pubkey, so even
+    //    a broker logging the response body cannot recover plaintext
+    //    DEKs without the daemon's transport private key.
+    //
+    //    `derive_keypair` from 32 bytes of OS randomness is the most
+    //    portable shape — avoids the rand_core 0.6 vs 0.9 trait-bound
+    //    fight that would come from passing an &mut OsRng directly to
+    //    `Kem::gen_keypair`. The IKM is fed to the KDF, so 32 bytes of
+    //    high-quality entropy from `getrandom` is sufficient.
+    let mut ikm = [0u8; 32];
+    getrandom::getrandom(&mut ikm)
+        .map_err(|e| BrokerError::HttpError(format!("getrandom: {e}")))?;
+    let (transport_sk, transport_pk) = X25519HkdfSha256::derive_keypair(&ikm);
+    ikm.fill(0);
+    let transport_pk_bytes = transport_pk.to_bytes();
+    let transport_pk_b64 = bytes_to_b64url(transport_pk_bytes.as_slice());
+
+    // 7. Fetch keys + lease for the workbook.
+    let release = release_keys(
+        &broker_url,
+        &exchange.bearer,
+        workbook_id,
+        &transport_pk_b64,
+    )
+    .await?;
 
     let keys = release
         .keys
         .into_iter()
         .map(|k| {
-            let bytes = URL_SAFE_NO_PAD
-                .decode(k.dek.trim_end_matches('='))
-                .map_err(|e| BrokerError::BadDek(format!("base64url: {e}")))?;
-            if bytes.len() != 32 {
-                return Err(BrokerError::BadDek(format!("len={}", bytes.len())));
-            }
+            let dek = unseal_dek(
+                &k.sealed_dek,
+                &transport_sk,
+                workbook_id,
+                &k.view_id,
+                policy_hash,
+            )?;
             Ok(UnlockedKey {
                 view_id: k.view_id,
-                dek: SecretSlice::new(bytes.into_boxed_slice()),
+                dek,
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -338,7 +387,11 @@ struct SignedLease {
 #[derive(Deserialize)]
 struct ReleasedKey {
     view_id: String,
-    dek: String,
+    /// HPKE-sealed DEK: base64url(enc || ciphertext) where enc is the
+    /// 32-byte X25519 ephemeral pubkey and ciphertext is 32B DEK + 16B
+    /// Poly1305 tag. AAD bound to (workbook_id, view_id, policy_hash)
+    /// per `apps/workbooks-broker/src/lib/sealed.ts`.
+    sealed_dek: String,
 }
 
 #[derive(Deserialize)]
@@ -358,6 +411,7 @@ async fn release_keys(
     broker_url: &str,
     bearer: &str,
     workbook_id: &str,
+    transport_pk_b64: &str,
 ) -> Result<ReleaseResponse, BrokerError> {
     let res = http_client()
         .post(format!(
@@ -365,9 +419,7 @@ async fn release_keys(
             urlencode(workbook_id)
         ))
         .header("Authorization", format!("Bearer {bearer}"))
-        // Empty JSON body — POST shape is forward-compatible with C2's
-        // transport_pubkey (per workbooks.ts comment).
-        .json(&serde_json::json!({}))
+        .json(&serde_json::json!({ "transport_pubkey": transport_pk_b64 }))
         .send()
         .await
         .map_err(|e| BrokerError::HttpError(format!("key POST: {e}")))?;
@@ -395,6 +447,66 @@ async fn release_keys(
     }
     let body = res.text().await.unwrap_or_default();
     Err(BrokerError::HttpError(format!("key release {status}: {body}")))
+}
+
+/// Open one HPKE-sealed DEK using the daemon's per-flow private key.
+/// Returns the 32-byte plaintext DEK in a SecretSlice so it zeroizes
+/// on drop. Verifies the AEAD AAD matches (workbook_id, view_id,
+/// policy_hash) — a bit of belt-and-braces defense against a broker
+/// that mixes up keys between requests, since the AAD ties each
+/// sealed_dek to its intended position in the response.
+fn unseal_dek(
+    sealed_b64: &str,
+    transport_sk: &<X25519HkdfSha256 as Kem>::PrivateKey,
+    workbook_id: &str,
+    view_id: &str,
+    policy_hash: &str,
+) -> Result<SecretSlice<u8>, BrokerError> {
+    let sealed = URL_SAFE_NO_PAD
+        .decode(sealed_b64.trim_end_matches('='))
+        .map_err(|e| BrokerError::BadDek(format!("sealed_dek b64url: {e}")))?;
+    if sealed.len() < X25519_ENC_LEN + 16 {
+        return Err(BrokerError::BadDek(format!(
+            "sealed_dek too short: len={}",
+            sealed.len()
+        )));
+    }
+    let (enc_bytes, ct_bytes) = sealed.split_at(X25519_ENC_LEN);
+    let enc =
+        <X25519HkdfSha256 as Kem>::EncappedKey::from_bytes(enc_bytes).map_err(|e| {
+            BrokerError::BadDek(format!("enc deserialize: {e:?}"))
+        })?;
+
+    let aad = build_dek_aad(workbook_id, view_id, policy_hash);
+    let plaintext: Vec<u8> = hpke::single_shot_open::<
+        ChaCha20Poly1305,
+        HkdfSha256,
+        X25519HkdfSha256,
+    >(
+        &OpModeR::Base,
+        transport_sk,
+        &enc,
+        HPKE_INFO,
+        ct_bytes,
+        &aad,
+    )
+    .map_err(|e| BrokerError::BadDek(format!("HPKE open: {e:?}")))?;
+
+    if plaintext.len() != 32 {
+        return Err(BrokerError::BadDek(format!(
+            "unsealed DEK wrong length: {}",
+            plaintext.len()
+        )));
+    }
+    Ok(SecretSlice::new(plaintext.into_boxed_slice()))
+}
+
+fn build_dek_aad(workbook_id: &str, view_id: &str, policy_hash: &str) -> Vec<u8> {
+    format!("studio-v1|{workbook_id}|{view_id}|{policy_hash}").into_bytes()
+}
+
+fn bytes_to_b64url(bytes: &[u8]) -> String {
+    URL_SAFE_NO_PAD.encode(bytes)
 }
 
 fn http_client() -> reqwest::Client {
@@ -473,6 +585,108 @@ impl AuthSuccess {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// HPKE round-trip using the Rust crate on both sides — proves the
+    /// daemon's `unseal_dek` can recover a DEK that was sealed using
+    /// the same suite (DHKEM(X25519, HKDF-SHA256) + HKDF-SHA256 +
+    /// ChaCha20-Poly1305) and the same `studio-v1` AAD format. Does
+    /// NOT prove interop with the broker's `@hpke/core` — that's the
+    /// live e2e smoke. But it pins our side: the AAD bytes, the
+    /// enc-prefix layout, the info string, the wire encoding.
+    #[test]
+    fn unseal_roundtrip_matches_broker_aad_format() {
+        let workbook_id = "wb_test_roundtrip";
+        let view_id = "default";
+        let policy_hash = "sha256:cafebabe";
+        let dek = [0x42u8; 32];
+
+        let (sealed_b64, sk) = seal_dek_for_test(
+            workbook_id, view_id, policy_hash, &dek,
+        );
+        let unsealed =
+            unseal_dek(&sealed_b64, &sk, workbook_id, view_id, policy_hash)
+                .expect("unseal");
+        assert_eq!(unsealed.expose_secret(), &dek[..]);
+    }
+
+    #[test]
+    fn unseal_with_wrong_aad_fails() {
+        let workbook_id = "wb_test_aad";
+        let view_id = "default";
+        let policy_hash = "sha256:right";
+        let dek = [0x99u8; 32];
+
+        let (sealed_b64, sk) = seal_dek_for_test(
+            workbook_id, view_id, policy_hash, &dek,
+        );
+        let err = unseal_dek(
+            &sealed_b64, &sk, workbook_id, view_id, "sha256:wrong",
+        )
+        .unwrap_err();
+        assert!(matches!(err, BrokerError::BadDek(_)));
+    }
+
+    /// Test helper: stand in for the broker's HPKE-seal step. Returns
+    /// (base64url(enc||ct), recipient private key) so the caller can
+    /// pass both to `unseal_dek`. Uses two-step setup_sender +
+    /// ctx.seal so we don't depend on a particular single-shot API
+    /// shape in the hpke crate.
+    fn seal_dek_for_test(
+        workbook_id: &str,
+        view_id: &str,
+        policy_hash: &str,
+        dek: &[u8; 32],
+    ) -> (String, <X25519HkdfSha256 as Kem>::PrivateKey) {
+        // Deterministic recipient keypair so the test is reproducible.
+        let (recipient_sk, recipient_pk) = X25519HkdfSha256::derive_keypair(&[3u8; 32]);
+        let recipient_pk_bytes = recipient_pk.to_bytes();
+        let recipient_pk_imported =
+            <X25519HkdfSha256 as Kem>::PublicKey::from_bytes(&recipient_pk_bytes)
+                .unwrap();
+
+        let aad = build_dek_aad(workbook_id, view_id, policy_hash);
+        let mut rng = FixedRng([0xA5u8; 32]);
+        let (encapped, mut sender_ctx) = hpke::setup_sender::<
+            ChaCha20Poly1305,
+            HkdfSha256,
+            X25519HkdfSha256,
+            _,
+        >(
+            &hpke::OpModeS::Base,
+            &recipient_pk_imported,
+            HPKE_INFO,
+            &mut rng,
+        )
+        .unwrap();
+        let ct = sender_ctx.seal(dek, &aad).unwrap();
+
+        let mut sealed = Vec::with_capacity(32 + ct.len());
+        sealed.extend_from_slice(&encapped.to_bytes());
+        sealed.extend_from_slice(&ct);
+        (bytes_to_b64url(&sealed), recipient_sk)
+    }
+
+    /// Deterministic "RNG" for tests — fills with a fixed pattern.
+    /// `try_fill_bytes` has a default impl in rand_core 0.6 so we
+    /// don't need to provide it here.
+    struct FixedRng([u8; 32]);
+    impl hpke::rand_core::RngCore for FixedRng {
+        fn next_u32(&mut self) -> u32 {
+            u32::from_le_bytes([self.0[0], self.0[1], self.0[2], self.0[3]])
+        }
+        fn next_u64(&mut self) -> u64 {
+            u64::from_le_bytes([
+                self.0[0], self.0[1], self.0[2], self.0[3], self.0[4], self.0[5],
+                self.0[6], self.0[7],
+            ])
+        }
+        fn fill_bytes(&mut self, dest: &mut [u8]) {
+            for (i, b) in dest.iter_mut().enumerate() {
+                *b = self.0[i % 32];
+            }
+        }
+    }
+    impl hpke::rand_core::CryptoRng for FixedRng {}
 
     #[test]
     fn urlencode_basics() {
