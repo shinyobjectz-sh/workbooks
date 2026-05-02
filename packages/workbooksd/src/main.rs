@@ -57,6 +57,7 @@ use axum::{
 };
 
 mod acp;
+mod broker_client;
 mod c2pa_sign;
 mod edit_log;
 mod envelope;
@@ -192,6 +193,27 @@ struct Session {
     /// in data terms but a visible flicker in the iframe player.
     /// Entries within `SEED_ECHO_WINDOW_MS` are skipped.
     recently_seeded: HashMap<String, Instant>,
+    /// In-memory cleartext for sealed (studio-v1) workbooks. When
+    /// present, /wb/<token>/ serves these bytes instead of reading
+    /// from `path` — the file on disk is the encrypted envelope, and
+    /// cleartext deliberately never lands on disk. Held in
+    /// `secrecy::SecretBox` so it's zeroized on drop and can't be
+    /// formatted into a log line.
+    cleartext: Option<secrecy::SecretBox<Vec<u8>>>,
+    /// Lease metadata returned by the broker — JWT (opaque to the
+    /// daemon today, will be verified by future client code) and the
+    /// epoch-second `exp`. Set together with `cleartext`. Surfaced
+    /// to the page via /wb/<token>/sealed/whoami in C1.9 / C1.10.
+    #[allow(dead_code)]
+    lease_jwt: Option<String>,
+    #[allow(dead_code)]
+    lease_exp: Option<i64>,
+    /// Identity claims from the broker exchange. Used for audit log
+    /// lines and (later) for surfacing "signed in as …" in the UI.
+    #[allow(dead_code)]
+    sealed_identity_sub: Option<String>,
+    #[allow(dead_code)]
+    sealed_identity_email: Option<String>,
 }
 
 /// Map of secret-id → list of host patterns the daemon will splice
@@ -265,6 +287,15 @@ impl SessionStore {
                 permissions: None,
                 workbook_id: None,
                 recently_seeded: HashMap::new(),
+                // Cleartext + lease are deliberately not persisted —
+                // sealed-workbook auth state is process-lifetime only.
+                // A daemon restart forces re-authentication; C1.9
+                // (lease cache) will provide an offline grace window.
+                cleartext: None,
+                lease_jwt: None,
+                lease_exp: None,
+                sealed_identity_sub: None,
+                sealed_identity_email: None,
             });
             count += 1;
         }
@@ -318,11 +349,84 @@ impl SessionStore {
             permissions: None,
             workbook_id: None,
             recently_seeded: HashMap::new(),
+            cleartext: None,
+            lease_jwt: None,
+            lease_exp: None,
+            sealed_identity_sub: None,
+            sealed_identity_email: None,
         });
         if let Err(e) = self.persist_to_disk() {
             eprintln!("[workbooksd] sessions.tsv persist failed: {e}");
         }
         evicted
+    }
+
+    /// Insert a token bound to a sealed (studio-v1) workbook. The
+    /// `cleartext` is the just-decrypted HTML body — held in memory
+    /// for the life of the session and zeroized when the session is
+    /// evicted or the daemon shuts down. `lease_jwt` / `lease_exp` /
+    /// identity claims come straight from the broker exchange and
+    /// are surfaced via the audit log.
+    fn insert_sealed(
+        &mut self,
+        token: String,
+        path: PathBuf,
+        cleartext: secrecy::SecretBox<Vec<u8>>,
+        lease_jwt: String,
+        lease_exp: i64,
+        identity_sub: String,
+        identity_email: String,
+    ) -> Option<String> {
+        let evicted = if self.map.len() >= self.cap {
+            self.map
+                .iter()
+                .min_by_key(|(_, s)| s.last_access)
+                .map(|(k, _)| k.clone())
+                .and_then(|k| {
+                    self.map.remove(&k);
+                    Some(k)
+                })
+        } else {
+            None
+        };
+        self.map.insert(token, Session {
+            path,
+            last_access: Instant::now(),
+            secrets_policy: None,
+            permissions: None,
+            workbook_id: None,
+            recently_seeded: HashMap::new(),
+            cleartext: Some(cleartext),
+            lease_jwt: Some(lease_jwt),
+            lease_exp: Some(lease_exp),
+            sealed_identity_sub: Some(identity_sub),
+            sealed_identity_email: Some(identity_email),
+        });
+        // Persist the (token, path) pair as usual. Cleartext + lease
+        // are deliberately NOT persisted — they live in memory only.
+        // After a daemon restart the token will resolve to the
+        // encrypted file on disk; the browser fallback path in the
+        // envelope HTML will re-trigger broker auth.
+        if let Err(e) = self.persist_to_disk() {
+            eprintln!("[workbooksd] sessions.tsv persist failed: {e}");
+        }
+        evicted
+    }
+
+    /// Look up the in-memory cleartext for a sealed workbook token.
+    /// Returns a fresh SecretBox holding a copy of the bytes — caller
+    /// drops it when serve completes and the bytes are zeroized.
+    /// None for plaintext workbooks (caller should fall back to a
+    /// disk read of `path`).
+    pub(crate) fn cleartext_for(
+        &mut self,
+        token: &str,
+    ) -> Option<secrecy::SecretBox<Vec<u8>>> {
+        let s = self.map.get_mut(token)?;
+        s.last_access = Instant::now();
+        let stored = s.cleartext.as_ref()?;
+        let copy: Vec<u8> = secrecy::ExposeSecret::expose_secret(stored).clone();
+        Some(secrecy::SecretBox::new(Box::new(copy)))
     }
 
     /// Look up a token's bound path and refresh its last_access stamp.
@@ -493,6 +597,14 @@ async fn daemon_main() {
         .route("/health", get(health))
         .route("/open", post(open_handler))
         .route("/icons/:id", get(icon_handler))
+        // Ledger endpoints — read-only summaries used by the Tauri
+        // Workbooks Manager (origin tauri://localhost on macOS).
+        // Browser CORS would otherwise block the manager from
+        // reading the JSON even though require_daemon_origin
+        // accepts the request. The handlers themselves still gate
+        // on require_daemon_origin for CSRF defense.
+        .route("/ledger/list", get(ledger_list_handler))
+        .route("/ledger/:workbook_id", get(ledger_by_id_handler))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
@@ -534,7 +646,9 @@ async fn daemon_main() {
         .route("/wb/:token/permissions/revoke", post(permissions_revoke_handler))
         .route("/wb/:token/ledger", get(ledger_for_token_handler))
         .route("/wb/:token/related", get(related_for_token_handler))
-        .route("/ledger/:workbook_id", get(ledger_by_id_handler))
+        // /ledger/list and /ledger/:workbook_id moved to the
+        // public_router so the Tauri Manager (origin
+        // tauri://localhost) gets CORS headers from tower-http.
         .with_state(state);
 
     // Bind preference order:
@@ -824,12 +938,111 @@ async fn open_handler(
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
     let token = mint_token();
+
+    // Peek the file to decide plaintext vs sealed. Cheap (a few KB
+    // read for the meta tags) but bounded — we only care about the
+    // header, not the whole payload, on the detection pass. We still
+    // do a full read inside the sealed branch to parse + decrypt.
+    let raw = match tokio::fs::read_to_string(&path).await {
+        Ok(s) => s,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("read failed: {e}"),
+            )
+                .into_response();
+        }
+    };
+
+    if envelope::looks_like_envelope(&raw) {
+        match open_sealed(&state, token.clone(), path.clone(), raw).await {
+            Ok(()) => {
+                let url = format!("http://{BIND_HOST}:{}/wb/{token}/", bound_port());
+                return (StatusCode::OK, axum::Json(OpenResp { token, url }))
+                    .into_response();
+            }
+            Err(msg) => {
+                return (StatusCode::BAD_GATEWAY, msg).into_response();
+            }
+        }
+    }
+
     let evicted = state.sessions.lock().await.insert(token.clone(), path);
     if let Some(old) = evicted {
         eprintln!("[workbooksd] sessions at cap; evicted oldest token {old}");
     }
     let url = format!("http://{BIND_HOST}:{}/wb/{token}/", bound_port());
     (StatusCode::OK, axum::Json(OpenResp { token, url })).into_response()
+}
+
+/// C1.8 sealed-workbook open path: parse the envelope, drive the
+/// broker auth flow, decrypt the cleartext into memory, register a
+/// session bound to the cleartext (NOT to the file path's contents).
+///
+/// All error returns produce a single human-readable string that
+/// open_handler bubbles up as a 502 — the CLI's `workbook open` (and
+/// the Studio shell-out) display it verbatim.
+async fn open_sealed(
+    state: &AppState,
+    token: String,
+    path: PathBuf,
+    raw: String,
+) -> Result<(), String> {
+    let env = envelope::parse(&raw)
+        .map_err(|e| format!("envelope parse failed: {e}"))?;
+
+    // Dev override: if WORKBOOKSD_BROKER_OVERRIDE is set, use that
+    // instead of the URL embedded in the envelope. Lets a local dev
+    // broker serve a fixture sealed against staging/prod without
+    // re-sealing the file. Production daemons should never set this.
+    let broker_url = std::env::var("WORKBOOKSD_BROKER_OVERRIDE")
+        .unwrap_or_else(|_| env.broker_url.clone());
+    if broker_url != env.broker_url {
+        eprintln!(
+            "[workbooksd] broker override: envelope says {} but using {} (dev)",
+            env.broker_url, broker_url,
+        );
+    }
+
+    audit_log(&path, "broker-auth-begin", None, None);
+
+    let auth = broker_client::run_flow(&broker_url, &env.workbook_id, |url| {
+        spawn_browser(url);
+    })
+    .await
+    .map_err(|e| format!("broker auth: {e}"))?;
+
+    // C1: single "default" view per workbook. C2 will iterate the
+    // unlocked set and produce a multi-view in-memory layout.
+    let key = auth
+        .keys
+        .iter()
+        .find(|k| k.view_id == "default")
+        .ok_or_else(|| "broker did not release a 'default' view key".to_string())?;
+
+    let cleartext = envelope::decrypt_view(&env, "default", &key.dek)
+        .map_err(|e| format!("decrypt failed: {e}"))?;
+
+    audit_log(
+        &path,
+        "broker-auth-ok",
+        Some(&auth.sub),
+        Some(&auth.email),
+    );
+
+    let evicted = state.sessions.lock().await.insert_sealed(
+        token,
+        path,
+        cleartext,
+        auth.lease_jwt,
+        auth.lease_exp,
+        auth.sub,
+        auth.email,
+    );
+    if let Some(old) = evicted {
+        eprintln!("[workbooksd] sessions at cap; evicted oldest token {old}");
+    }
+    Ok(())
 }
 
 async fn redirect_to_slash(AxPath(token): AxPath<String>) -> Redirect {
@@ -861,7 +1074,22 @@ async fn serve_workbook(
         )
             .into_response();
     };
-    match tokio::fs::read_to_string(&path).await {
+
+    // Sealed-workbook fast path: serve from in-memory cleartext when
+    // it's there. The encrypted file on disk stays sealed. We pull
+    // out the SecretBox, copy the bytes into a String for response
+    // building, and drop the SecretBox so the inner copy zeroizes.
+    let sealed_html = state.sessions.lock().await.cleartext_for(&token);
+    let html_from_sealed = sealed_html.and_then(|sb| {
+        let bytes: Vec<u8> = secrecy::ExposeSecret::expose_secret(&sb).clone();
+        String::from_utf8(bytes).ok()
+    });
+
+    let html_result: Result<String, std::io::Error> = match html_from_sealed {
+        Some(s) => Ok(s),
+        None => tokio::fs::read_to_string(&path).await,
+    };
+    match html_result {
         Ok(html) => {
             // Extract the per-secret domain policy from the workbook's
             // spec script and cache it on the session. /proxy will
@@ -1080,6 +1308,13 @@ pub(crate) fn require_daemon_origin(headers: &HeaderMap) -> Result<(), Response>
     let expected = format!("http://{BIND_HOST}:{}", bound_port());
     match headers.get("origin").and_then(|v| v.to_str().ok()) {
         Some(o) if o == expected => Ok(()),
+        // Tauri webviews load from `tauri://localhost` (macOS) or
+        // `https://tauri.localhost` (Windows). The Workbooks
+        // Manager runs in one of those contexts and is a trusted
+        // local app — same-machine binding (127.0.0.1) is the
+        // primary boundary; this is the secondary CSRF check.
+        Some(o) if o.starts_with("tauri://")
+                || o.starts_with("https://tauri.localhost") => Ok(()),
         // No Origin = same-origin GET / programmatic fetch with
         // mode:"same-origin"; permissible.
         None => Ok(()),
@@ -1480,6 +1715,23 @@ async fn ledger_for_token_handler(
     };
     let history = ledger::for_workbook(&id);
     (StatusCode::OK, axum::Json(serde_json::json!({"history": history}))).into_response()
+}
+
+/// GET /ledger/list — every workbook the ledger knows about, with
+/// thin summary fields suitable for an index/list view. Drops the
+/// per-save details (use /ledger/<id> for the full history). Sorted
+/// most-recently-saved first. Used by the Workbooks Manager's
+/// home screen.
+async fn ledger_list_handler(headers: HeaderMap) -> impl IntoResponse {
+    if let Err(resp) = require_daemon_origin(&headers) {
+        return resp;
+    }
+    let workbooks = ledger::list_summaries();
+    (
+        StatusCode::OK,
+        axum::Json(serde_json::json!({ "workbooks": workbooks })),
+    )
+        .into_response()
 }
 
 async fn ledger_by_id_handler(
