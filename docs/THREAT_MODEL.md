@@ -146,7 +146,7 @@ Consolidates the multi-party threats from `SECURITY_MODEL_MULTIPARTY.md` and the
 | 6 | Stolen lease replayed by different recipient | Lease bound to (sub, broker_nonce) via HKDF; daemon verifies on use. The HPKE seal in row 3 also implicitly binds DEK release to the daemon's transport private key — a stolen lease without that key cannot unwrap any released DEKs. | ✅ | — |
 | 7 | IdP revocation — old recipient still has cached lease | TTL bounds the window (default 1h online, 24h offline grace). Daemon refreshes at 80%. | ⚠ (refresh path lands with C1.9) | core-1fi.1.9 |
 | 8 | Recipient extracts cleartext post-decrypt (A5) | Out of scope. View partitioning (C2) limits exposure; audit log records access. | ✅ accepted | core-1fi.2 |
-| 9 | Tampered envelope claims forged sender / chain (A7) | C2PA chain signed with author's ed25519. **Today: per-machine key with no cross-machine attestation.** **Hardening: broker-pinned author public keys.** | ⚠ | **C9.4** (`core-l6n.4`) |
+| 9 | Tampered envelope claims forged sender / chain (A7) | C2PA chain signed with author's ed25519. Authors register their public keys at the broker (`POST /v1/authors/me/keys`); recipients verify each chain assertion against the broker-attested live key set for the claimed `author_sub` (`GET /v1/authors/:sub/keys`). Revoked keys drop out of the public surface immediately so no signature created with a revoked key passes verification on new content. **Browser-side verification of the chain against the public surface lands with C8.3.** | ✅ (broker side); ⚠ (in-browser verifier) | C9.4 (closed); C8.3 |
 | 10 | Audit log tampering by broker insider (A9) | Audit entries chained (each includes `prev_hash`); recipients cache their own copy of entries on issuance. **Hardening: D1 trigger blocks UPDATE/DELETE on audit rows.** | ⚠ | **C9.6** (`core-l6n.6`) |
 | 11 | MITM between daemon and broker (A2) | TLS via webpki-roots; `broker.signal.ml` + HSTS. *Long-term: cert pinning.* | ✅ (TLS); ⚠ (no pinning) | (post-MVP) |
 | 12 | Broker key-release endpoint as enumeration oracle | Workbook ids are 128-bit random; auth required; uniform 401 on miss. | ✅ | core-1fi.1.7 |
@@ -186,7 +186,7 @@ Each row maps to a `bd` ticket under `core-l6n`. Filed P0 = blocks production; P
 | `core-l6n.1` | C9.1 Sealed-box DEK transport | **P0** | ✅ closed |
 | `core-l6n.2` | C9.2 Constant-time secret compares | P1 | — |
 | `core-l6n.3` | C9.3 Memory-only KEK in production | **P0** | ✅ closed |
-| `core-l6n.4` | C9.4 Author key registration + verification | P1 | C8.3 |
+| `core-l6n.4` | C9.4 Author key registration (broker side) | P1 | ✅ closed (C8.3 still owns in-browser verifier) |
 | `core-l6n.5` | C9.5 Local-credential gate (cached lease open) | **P0** | C1.9 |
 | `core-l6n.6` | C9.6 Append-only audit log (D1 constraint) | P1 | — |
 | `core-l6n.7` | C9.7 THREAT_MODEL.md | **P0** | this doc |
@@ -230,7 +230,12 @@ Lower stakes — audit-log tampering becomes possible. Rotate; gap-detection via
 
 ### Author signing key compromise (per-machine)
 
-Author re-runs key generation on a clean machine; broker pubkey registration (C9.4) updates the canonical pubkey. Recipients see "key rotated" assertion in the chain. Old assertions still verify against the old pubkey; new ones use the new key.
+Compromised author key:
+1. Author calls `DELETE /v1/authors/me/keys/:id` on the compromised key — drops out of the public verification surface immediately.
+2. Author registers a fresh keypair on a clean machine via `POST /v1/authors/me/keys`.
+3. New saves sign with the new key; recipients verify against the broker-attested live key set, find the new key, accept.
+4. Old assertions in chain still verify against the (still-stored, now-revoked) old pubkey for *historical* purposes — but no NEW signature with that revoked key will pass verification because the public surface only returns live keys.
+5. If the compromise predates a substantial number of saves the user can't tell apart, force re-seal of those workbooks under fresh DEKs.
 
 ### Broker outage
 
