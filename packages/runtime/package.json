@@ -42,6 +42,11 @@
       "svelte": "./src/blockRegistry.ts",
       "types": "./src/blockRegistry.ts"
     },
+    "./install-prompt": {
+      "svelte": "./src/install-prompt/index.ts",
+      "types": "./src/install-prompt/index.ts",
+      "default": "./src/install-prompt/index.ts"
+    },
     "./types": {
       "types": "./src/types.ts",
       "default": "./src/types.ts"
