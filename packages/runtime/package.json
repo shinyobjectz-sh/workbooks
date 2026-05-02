@@ -106,6 +106,10 @@
       "types": "./src/storage/index.ts",
       "default": "./src/storage/index.ts"
     },
+    "./agent-acp": {
+      "types": "./src/agent-acp/index.ts",
+      "default": "./src/agent-acp/index.ts"
+    },
     "./svelte": {
       "svelte": "./src/svelte/index.ts",
       "types": "./src/svelte/index.ts"
@@ -228,6 +232,7 @@
     "vite": "^6.0.0"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "^0.21.0",
     "@noble/ed25519": "^3",
     "@noble/hashes": "^2",
     "@syncedstore/core": "^0.6.0",
