@@ -141,7 +141,7 @@ Consolidates the multi-party threats from `SECURITY_MODEL_MULTIPARTY.md` and the
 | 1 | Sealed file stolen in transit (A3, A12) | AES-256-GCM envelope; cleartext only inside policy-allowed daemon process. | ✅ | — |
 | 2 | Authenticated-not-allowed identity requests DEK (A4) | Broker policy eval; deny + audit. | ✅ | core-1fi.1.7 |
 | 3 | Compromised broker logs released DEKs (A9) | **HPKE-sealed DEK transport** — recipient sends per-flow X25519 transport pubkey on the `/key` request body; broker HPKE-seals each DEK (DHKEM(X25519,HKDF-SHA256) + HKDF-SHA256 + ChaCha20-Poly1305, AAD-bound to workbook+view+policy_hash) before return. Broker holds plaintext DEK only between unwrap-from-D1 and HPKE-seal — never in the response body. | ✅ | C9.1 (closed) |
-| 4 | Compromised broker tries to recover all wrapped DEKs (A9) | KEK lives in a different security domain than broker compute. Today: env var (dev) / wrangler secret (prod intent). **Hardening: enforce wrangler-secret-only path; remove env-var fallback; rotation runbook.** | ⚠ | **C9.3** (`core-l6n.3`) |
+| 4 | Compromised broker tries to recover all wrapped DEKs (A9) | KEK material is a wrangler secret in staging+prod (never an env var or `.dev.vars`). The keyring routes unwrap by `kek_ref` so a `BROKER_LOCAL_KEK_PREV` can keep legacy entries unwrappable across a rotation without downtime. Rotation runbook: `docs/KEK_ROTATION.md`. KEK separation from broker compute is still v1-pilot-grade (same Cloudflare account); harder isolation (separate-account KEK worker, HSM/KMS) deferred until a paid customer demands it. | ✅ (config + runbook); ⚠ (cross-account isolation deferred) | C9.3 (closed) |
 | 5 | Subpoena targets broker (A11) | Broker structurally cannot produce cleartext. Audit log signed + chained. | ✅ | — |
 | 6 | Stolen lease replayed by different recipient | Lease bound to (sub, broker_nonce) via HKDF; daemon verifies on use. The HPKE seal in row 3 also implicitly binds DEK release to the daemon's transport private key — a stolen lease without that key cannot unwrap any released DEKs. | ✅ | — |
 | 7 | IdP revocation — old recipient still has cached lease | TTL bounds the window (default 1h online, 24h offline grace). Daemon refreshes at 80%. | ⚠ (refresh path lands with C1.9) | core-1fi.1.9 |
@@ -185,7 +185,7 @@ Each row maps to a `bd` ticket under `core-l6n`. Filed P0 = blocks production; P
 |---|---|---|---|
 | `core-l6n.1` | C9.1 Sealed-box DEK transport | **P0** | ✅ closed |
 | `core-l6n.2` | C9.2 Constant-time secret compares | P1 | — |
-| `core-l6n.3` | C9.3 Memory-only KEK in production | **P0** | GA |
+| `core-l6n.3` | C9.3 Memory-only KEK in production | **P0** | ✅ closed |
 | `core-l6n.4` | C9.4 Author key registration + verification | P1 | C8.3 |
 | `core-l6n.5` | C9.5 Local-credential gate (cached lease open) | **P0** | C1.9 |
 | `core-l6n.6` | C9.6 Append-only audit log (D1 constraint) | P1 | — |
@@ -204,16 +204,18 @@ Each row maps to a `bd` ticket under `core-l6n`. Filed P0 = blocks production; P
 
 ## 6. Disaster recovery
 
-### KEK compromise
+### KEK compromise / scheduled rotation
 
-If `BROKER_LOCAL_KEK` is exfiltrated:
-1. Provision a new KEK; rotate via `wrangler secret put BROKER_LOCAL_KEK_v2`.
-2. Read every wrapped DEK from D1, unwrap with old KEK, re-wrap with new KEK, write back. Idempotent migration, run as a one-off worker route.
-3. Update `kek.ts` `kek_ref` to the new version. New wraps use new KEK; old wraps are migrated.
-4. Notify customers — KEK rotation is not zero-impact (logs the rotation event, may trigger compliance reporting on their side depending on their regulatory regime).
-5. Investigate and rotate any credentials potentially exposed at the same time.
+Full step-by-step in [`KEK_ROTATION.md`](./KEK_ROTATION.md). Summary:
 
-**Runbook to be written as part of C9.3.**
+1. Mint new 32-byte KEK (`openssl rand 32 | base64url`).
+2. Bind new as `BROKER_LOCAL_KEK`, current as `BROKER_LOCAL_KEK_PREV`. Bump `id` strings in `kek.ts` (e.g. `v1` → `v2` for primary, `vprev` becomes `v1`).
+3. Deploy. Both versions live in the keyring; new wraps use the primary; legacy entries unwrap via the rotation tail.
+4. Run the re-wrap migration route until the `wrapped_keys.kek_ref` distribution shows only the new primary.
+5. Unbind `BROKER_LOCAL_KEK_PREV`. Remove the migration route + token.
+6. Notify customers if compliance-driven.
+
+Annual rotation drilled twice yearly in staging.
 
 ### Lease signing key compromise
 
