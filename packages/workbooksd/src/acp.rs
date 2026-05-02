@@ -22,18 +22,21 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Path as AxPath, State,
     },
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
 use futures_util::{sink::SinkExt, stream::StreamExt};
-use serde::Serialize;
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     path::PathBuf,
     process::Stdio,
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::Command,
+    sync::mpsc,
 };
 
 use crate::AppState;
@@ -260,6 +263,77 @@ pub async fn list_handler() -> impl IntoResponse {
     (StatusCode::OK, axum::Json(detect_adapters())).into_response()
 }
 
+#[derive(Deserialize)]
+pub struct SeedReq {
+    /// Map of relative scratch-dir path → file content. Paths must
+    /// be relative; absolute or `..`-traversing paths are rejected.
+    /// Example: `{ "composition.html": "<html>…", "skills/fal-ai/SKILL.md": "..." }`
+    pub files: HashMap<String, String>,
+}
+
+/// Seed the per-session scratch dir with the workbook's logical
+/// files BEFORE the WebSocket upgrade triggers an adapter spawn.
+/// The browser POSTs its current composition + skills here; the
+/// daemon writes them to the scratch dir; when the adapter spawns,
+/// `Read` / `Bash ls` find real files.
+///
+/// Why this exists: ACP's fs/* methods are client-side, but Claude
+/// Code's bundled tools (Read, Write, Bash, Edit) hit the REAL
+/// filesystem regardless. So a virtualFs in the browser SDK alone
+/// isn't visible to the agent. Materializing the workbook's logical
+/// files into scratch makes them visible to those native tools.
+pub async fn seed_handler(
+    State(state): State<crate::AppState>,
+    AxPath(token): AxPath<String>,
+    headers: HeaderMap,
+    axum::Json(req): axum::Json<SeedReq>,
+) -> impl IntoResponse {
+    if let Err(resp) = crate::require_daemon_origin(&headers) {
+        return resp;
+    }
+    if state.sessions.lock().await.touch(&token).is_none() {
+        return (StatusCode::NOT_FOUND, "unknown token").into_response();
+    }
+    let scratch = session_scratch_dir(&token);
+    if let Err(e) = tokio::fs::create_dir_all(&scratch).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("create scratch: {e}"),
+        )
+            .into_response();
+    }
+    for (rel, content) in req.files {
+        // Defense-in-depth path validation — strip leading slashes,
+        // refuse `..` traversal, refuse empty / disk-root paths.
+        let clean = rel.trim_start_matches('/').to_string();
+        if clean.is_empty() || clean.split('/').any(|seg| seg == ".." || seg.is_empty()) {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("invalid scratch path: {rel:?}"),
+            )
+                .into_response();
+        }
+        let dest = scratch.join(&clean);
+        if let Some(parent) = dest.parent() {
+            if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("mkdir {}: {e}", parent.display()),
+                )
+                    .into_response();
+            }
+        }
+        if let Err(e) = tokio::fs::write(&dest, content).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("write {}: {e}", dest.display()),
+            )
+                .into_response();
+        }
+    }
+    (StatusCode::OK, "ok").into_response()
+}
+
 /// WebSocket upgrade handler. The URL path carries the adapter id
 /// (e.g. `/wb/<token>/agent/claude`). On accept we spawn the adapter
 /// shim, pipe its stdio bidirectionally to the WebSocket, and tear
@@ -409,12 +483,114 @@ async fn run_relay(
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
 
-    let (mut ws_tx, mut ws_rx) = socket.split();
+    let (ws_tx, mut ws_rx) = socket.split();
     let mut child_stdin = stdin;
     let mut stdout_lines = BufReader::new(stdout).lines();
     let mut stderr_lines = BufReader::new(stderr).lines();
 
     let adapter_id = adapter.id.clone();
+
+    // Shared sender — the stdout pump and the watcher both push WS
+    // frames. Wrap in Arc<Mutex> so both tasks can serialize sends.
+    let ws_tx = std::sync::Arc::new(tokio::sync::Mutex::new(ws_tx));
+
+    // File-watcher → WS pump. Notifies the browser whenever the
+    // adapter / agent has touched a file in the scratch dir, so
+    // the browser can mirror those changes back into the workbook
+    // substrate (e.g. composition.html → composition.set).
+    let watch_dir = scratch_dir.clone();
+    let watch_ws_tx = ws_tx.clone();
+    let watch_id = adapter_id.clone();
+    let (watch_kill_tx, mut watch_kill_rx) = mpsc::channel::<()>(1);
+    let watcher_task = tokio::spawn(async move {
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<Event>();
+        let mut watcher = match RecommendedWatcher::new(
+            move |res: notify::Result<Event>| {
+                if let Ok(ev) = res {
+                    let _ = event_tx.send(ev);
+                }
+            },
+            notify::Config::default(),
+        ) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("[acp/{watch_id}] watcher init failed: {e}");
+                return;
+            }
+        };
+        if let Err(e) = watcher.watch(&watch_dir, RecursiveMode::Recursive) {
+            eprintln!(
+                "[acp/{watch_id}] watch {} failed: {e}",
+                watch_dir.display()
+            );
+            return;
+        }
+
+        // Coalesce bursts — many editors / agents do open-write-rename
+        // sequences that fire 3-5 events for one logical save. We
+        // collect all events in a 60ms window keyed by path, then
+        // emit one WS notification per touched path with the latest
+        // content.
+        loop {
+            tokio::select! {
+                _ = watch_kill_rx.recv() => break,
+                Some(first) = event_rx.recv() => {
+                    let mut paths: std::collections::HashSet<PathBuf> =
+                        first.paths.into_iter().collect();
+                    if !is_payload_event(&first.kind) {
+                        // open/access/etc — ignore
+                        continue;
+                    }
+                    // Drain any other events in this window.
+                    let deadline = tokio::time::Instant::now()
+                        + std::time::Duration::from_millis(60);
+                    loop {
+                        let remaining = deadline
+                            .checked_duration_since(tokio::time::Instant::now())
+                            .unwrap_or_default();
+                        if remaining.is_zero() { break; }
+                        match tokio::time::timeout(remaining, event_rx.recv()).await {
+                            Ok(Some(ev)) if is_payload_event(&ev.kind) => {
+                                for p in ev.paths { paths.insert(p); }
+                            }
+                            _ => break,
+                        }
+                    }
+                    for p in paths {
+                        let rel = match p.strip_prefix(&watch_dir) {
+                            Ok(r) => r.to_string_lossy().into_owned(),
+                            Err(_) => continue,
+                        };
+                        if rel.starts_with(".") || rel.contains("/.") {
+                            continue; // skip dotfiles + .git internals
+                        }
+                        // Only push text-y files; binary diffs need a
+                        // different transport (Phase 4).
+                        let content = match tokio::fs::read_to_string(&p).await {
+                            Ok(c) => c,
+                            Err(_) => continue,
+                        };
+                        let frame = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "method": "_relay/file-changed",
+                            "params": { "path": rel, "content": content },
+                        });
+                        let txt = match serde_json::to_string(&frame) {
+                            Ok(s) => s,
+                            Err(_) => continue,
+                        };
+                        let mut tx = watch_ws_tx.lock().await;
+                        if tx.send(Message::Text(txt)).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+                else => break,
+            }
+        }
+        // Drop watcher on exit.
+        drop(watcher);
+    });
 
     // Stderr drain — best-effort logging. Adapters use stderr for
     // free-form diagnostics; we surface it in the daemon log so a
@@ -459,18 +635,21 @@ async fn run_relay(
 
     // Adapter → browser pump.
     let out_id = adapter_id.clone();
+    let out_ws_tx = ws_tx.clone();
     let outbound_task = tokio::spawn(async move {
         while let Ok(Some(line)) = stdout_lines.next_line().await {
             // Each line is a complete JSON-RPC message. Forward as
             // a single WS Text frame.
-            if ws_tx.send(Message::Text(line)).await.is_err() {
+            let mut tx = out_ws_tx.lock().await;
+            if tx.send(Message::Text(line)).await.is_err() {
                 eprintln!("[acp/{out_id}] WS peer closed during send");
                 break;
             }
         }
         // Try to send a clean WS close so the browser knows the
         // adapter exited gracefully.
-        let _ = ws_tx.send(Message::Close(None)).await;
+        let mut tx = out_ws_tx.lock().await;
+        let _ = tx.send(Message::Close(None)).await;
     });
 
     // Wait on whichever side finishes first. tokio::select! gives us
@@ -490,6 +669,8 @@ async fn run_relay(
     let _ = child.kill().await;
     let _ = child.wait().await;
     stderr_task.abort();
+    let _ = watch_kill_tx.send(()).await;
+    watcher_task.abort();
 
     // Best-effort scratch cleanup. Phase 2 will instead sync the
     // dir's contents back into the workbook's substrate before
@@ -515,4 +696,15 @@ async fn close_with_reason(socket: WebSocket, reason: &str) -> Result<(), axum::
         reason.replace('"', "\\\"")
     ))).await;
     s.send(Message::Close(None)).await
+}
+
+/// Filter out noise events the agent's own runtime generates that
+/// don't correspond to a logical "the file changed" — open/close
+/// for read, attribute changes, etc. We only pass through events
+/// where the file's content might have changed.
+fn is_payload_event(kind: &EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_),
+    )
 }

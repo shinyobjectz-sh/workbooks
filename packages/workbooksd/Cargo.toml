@@ -13,6 +13,12 @@ path = "src/main.rs"
 axum = { version = "0.7", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "signal", "process", "io-util"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# File watcher for the ACP scratch dir. macFSEvents on macOS, inotify
+# on Linux, ReadDirectoryChangesW on Windows. We use the simple
+# `RecommendedWatcher` shape — the workbook scratch is small and
+# workbooks-scale change rates are nowhere near needing the
+# `PollWatcher` fallback.
+notify = "6"
 tower-http = { version = "0.5", features = ["cors"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

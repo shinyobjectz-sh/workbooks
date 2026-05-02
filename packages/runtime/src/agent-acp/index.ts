@@ -93,6 +93,49 @@ function resolveBinding(): { origin: string; token: string } {
   return { origin: location.origin, token: m[1] };
 }
 
+/** Seed the daemon's per-session scratch dir with the workbook's
+ *  logical files BEFORE opening the WebSocket. Required because
+ *  the underlying CLIs (claude, codex) use their own native
+ *  Read/Write/Bash tools — not ACP's fs/* methods — so the files
+ *  have to actually exist as bytes on disk for the agent to find
+ *  them.
+ *
+ *  Pair with `connect()` and an `onFileChanged` hook to mirror the
+ *  agent's edits back into the workbook's substrate.
+ *
+ *   await seed({ files: {
+ *     "composition.html": currentComposition,
+ *     "skills/fal-ai/SKILL.md": skillBody,
+ *   }});
+ *   const session = await connect({ adapter, hooks: { onFileChanged } });
+ */
+export async function seed(opts: { files: Record<string, string> }): Promise<void> {
+  const b = resolveBinding();
+  const res = await fetch(`${b.origin}/wb/${b.token}/agent/seed`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(opts),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new AcpError(`seed: ${res.status} ${res.statusText} ${txt}`.trim());
+  }
+}
+
+/** Notification from the daemon's file watcher: a file in the
+ *  scratch dir changed (because the agent edited it). The browser
+ *  decides what to do with it — typically routes to a workbook-
+ *  state setter so the change appears live in the running app. */
+export interface FileChangedNotification {
+  /** Relative path inside the scratch dir, e.g. "composition.html"
+   *  or "skills/fal-ai/SKILL.md". */
+  path: string;
+  /** Full new content of the file. The daemon coalesces bursts
+   *  (open-write-rename triplets) so each notification represents
+   *  a logical "this is the current value." */
+  content: string;
+}
+
 /** GET /wb/<token>/agent/adapters — list installed ACP adapters
  *  + auth status. Cheap; safe to poll on every Manage modal open. */
 export async function listAdapters(): Promise<AcpAdapterStatus[]> {
@@ -181,6 +224,11 @@ export interface AcpClientHooks {
    *  Misses fall through to "not supported" — the agent will then
    *  use its own bash to read from the daemon's scratch dir. */
   virtualFs?: VirtualFs;
+  /** Daemon-side file-watcher notification: a file in the session's
+   *  scratch dir changed because the agent edited it via its own
+   *  native Read/Write/Bash tools. Pair with `seed()` to mirror
+   *  agent edits back into the workbook's state. */
+  onFileChanged?(n: FileChangedNotification): void;
 }
 
 export interface AcpSession {
@@ -319,6 +367,14 @@ export async function connect(opts: {
     if (typeof msg.method === "string") {
       if (msg.method === "session/update") {
         hooks.onSessionUpdate?.(msg.params as SessionNotification);
+      } else if (msg.method === "_relay/file-changed") {
+        // Daemon-emitted, not from the ACP protocol. The leading
+        // underscore is the protocol's reserved-namespace
+        // convention so it can't collide with future spec methods.
+        hooks.onFileChanged?.(msg.params as FileChangedNotification);
+      } else if (msg.method === "_relay/error") {
+        const m = (msg.params as { message?: string })?.message;
+        console.error(`[wb.acp] daemon error: ${m ?? "unknown"}`);
       }
       return;
     }

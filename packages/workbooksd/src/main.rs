@@ -356,6 +356,10 @@ async fn daemon_main() {
         )
         .route("/wb/:token/agent/adapters", get(acp::list_handler))
         .route("/wb/:token/agent/:adapter", get(acp::ws_handler))
+        .route(
+            "/wb/:token/agent/seed",
+            post(acp::seed_handler).layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
+        )
         .with_state(state);
 
     let addr: SocketAddr = format!("{BIND_HOST}:{BIND_PORT}").parse().unwrap();
@@ -528,7 +532,7 @@ async fn save_workbook(
 /// it on cross-origin fetch but not on top-level navigation, which
 /// is fine because /wb/<token>/ (the document load) is the entry
 /// point, not the attack surface.
-fn require_daemon_origin(headers: &HeaderMap) -> Result<(), Response> {
+pub(crate) fn require_daemon_origin(headers: &HeaderMap) -> Result<(), Response> {
     let expected = format!("http://{BIND_HOST}:{BIND_PORT}");
     match headers.get("origin").and_then(|v| v.to_str().ok()) {
         Some(o) if o == expected => Ok(()),
