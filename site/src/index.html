@@ -7,6 +7,11 @@
 <meta name="description" content="A tiny background runtime that lets your browser open and save .workbook.html files like real documents." />
 <link rel="icon" href="logo-black.svg" />
 <link rel="stylesheet" href="styles.css" />
+<!-- Tell the Dark Reader extension to leave us alone. Our palette
+     already responds to prefers-color-scheme; Dark Reader injecting
+     its own --darkreader-* var stack on top mangles the monochrome
+     intent (was rewriting fg/bg into greens/sepias on some users). -->
+<meta name="darkreader-lock">
 </head>
 <body>
 <main>
@@ -26,20 +31,12 @@
 
   <div class="platforms">
 
-    <a href="/dl/workbooksd-aarch64-apple-darwin.zip" class="platform" download>
+    <a href="/dl/Workbooks.pkg" class="platform" download>
       <span class="os-icon">
         <svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701"/></svg>
       </span>
       <div class="platform-name">macOS</div>
-      <div class="platform-meta">Apple Silicon</div>
-    </a>
-
-    <a href="/dl/workbooksd-x86_64-apple-darwin.zip" class="platform" download>
-      <span class="os-icon">
-        <svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701"/></svg>
-      </span>
-      <div class="platform-name">macOS</div>
-      <div class="platform-meta">Intel</div>
+      <div class="platform-meta">Universal · 7.5 MB</div>
     </a>
 
     <a href="/dl/workbooksd-x86_64-unknown-linux-gnu" class="platform" download>
@@ -59,7 +56,7 @@
     </span>
 
   </div>
-  <p class="platforms-note">All downloads are SHA-256 verified and Apple-notarized for macOS. <a href="/dl/sha256.txt">View checksums</a>.</p>
+  <p class="platforms-note">macOS .pkg is signed with Apple Developer ID + notarized by Apple. All downloads are SHA-256 verified — <a href="/dl/sha256.txt">view checksums</a>.</p>
 
   <section>
     <h2>Verifying your download</h2>
@@ -73,13 +70,13 @@
     <p>
       Manual verification:
     </p>
-    <pre><code>curl -fsSLO https://workbooks.sh/dl/workbooksd-aarch64-apple-darwin.zip
-curl -fsSL https://workbooks.sh/dl/sha256.txt | shasum -a 256 -c</code></pre>
+    <pre><code>curl -fsSLO https://workbooks.sh/dl/Workbooks.pkg
+curl -fsSL https://workbooks.sh/dl/sha256.txt | shasum -a 256 -c --ignore-missing</code></pre>
     <p class="muted">
-      Code-signing pipeline (Apple Developer ID, Microsoft Trusted Signing,
-      GPG-signed Linux artifacts) is wired in CI and activates as soon as
-      the corresponding signing keys are added to repository secrets.
-      Until then, integrity is enforced via SHA-256 only.
+      The macOS installer is signed with Apple Developer ID and notarized
+      by Apple — Gatekeeper accepts it without prompts. Microsoft Trusted
+      Signing for Windows and GPG-signed Linux artifacts are wired in CI
+      and ship when the corresponding signing keys land.
     </p>
   </section>
 
@@ -106,6 +103,7 @@ curl -fsSL https://workbooks.sh/dl/sha256.txt | shasum -a 256 -c</code></pre>
   <footer>
     <a href="/install">install.sh</a>
     <a href="/dl/sha256.txt">sha256.txt</a>
+    <a href="/inspect/">inspect a workbook</a>
     <a href="https://github.com/shinyobjectz-sh/workbooks/tree/main/packages/workbooksd">source</a>
     <span style="margin-left:auto">© Workbooks</span>
   </footer>

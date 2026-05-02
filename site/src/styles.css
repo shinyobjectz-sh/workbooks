@@ -1,27 +1,20 @@
+/* Strict monochrome — bg / fg / muted / a single hairline. No
+ * colored chips, no chunky borders. Boxiness was making the page
+ * read as a form; type + spacing carry the hierarchy now. */
 :root {
   --bg: #ffffff;
   --fg: #0a0a0a;
   --fg-muted: #555;
-  --line: #e7e7e7;
-  --accent: #0a0a0a;
-  --code-bg: #f6f6f6;
-  --code-border: #e0e0e0;
-  --cert-pending: #f59e0b;
-  --cert-awaiting: #94a3b8;
-  --cert-verified: #10b981;
+  --line: #ececec;
+  --code-bg: #f5f5f5;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #0a0a0a;
     --fg: #f5f5f5;
-    --fg-muted: #a0a0a0;
-    --line: #1f1f1f;
-    --accent: #f5f5f5;
+    --fg-muted: #9a9a9a;
+    --line: #1c1c1c;
     --code-bg: #141414;
-    --code-border: #262626;
-    --cert-pending: #fbbf24;
-    --cert-awaiting: #6b7280;
-    --cert-verified: #34d399;
   }
 }
 
@@ -59,9 +52,10 @@ h1 {
   max-width: 36em;
 }
 
+/* Install command — soft shaded pill, no border. The copy button
+ * is just text that brightens on hover. */
 .install {
   background: var(--code-bg);
-  border: 1px solid var(--code-border);
   border-radius: 8px;
   padding: 1rem 1.25rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -80,26 +74,28 @@ h1 {
 }
 .install .copy {
   background: transparent;
-  border: 1px solid var(--code-border);
-  color: var(--fg);
+  border: 0;
+  color: var(--fg-muted);
   font: inherit;
   font-size: 0.8rem;
   padding: 0.3rem 0.6rem;
-  border-radius: 4px;
   cursor: pointer;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
 }
-.install .copy:hover { background: var(--bg); }
-.install .copy.copied { color: var(--cert-verified); border-color: var(--cert-verified); }
+.install .copy:hover { color: var(--fg); }
+.install .copy.copied { color: var(--fg); }
 
-/* Platform download cards — minimal, two columns, icon over name. */
+/* Platform tiles — borderless. Hover lifts opacity + a faint shade.
+ * Unavailable is just dimmed text, no styling chrome. */
 .platforms {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 0.6rem;
+  gap: 0.5rem;
   margin: 0 0 0.75rem;
 }
 @media (min-width: 600px) {
-  .platforms { grid-template-columns: repeat(4, 1fr); }
+  .platforms { grid-template-columns: repeat(3, 1fr); }
 }
 .platform {
   display: flex;
@@ -107,17 +103,13 @@ h1 {
   align-items: flex-start;
   gap: 0.45rem;
   padding: 1rem;
-  background: var(--code-bg);
-  border: 1px solid var(--code-border);
-  border-radius: 10px;
+  background: transparent;
+  border-radius: 8px;
   text-decoration: none;
   color: var(--fg);
-  transition: border-color 0.15s ease, transform 0.15s ease;
+  transition: background 0.15s ease;
 }
-.platform:hover:not(.unavailable) {
-  border-color: var(--fg);
-  transform: translateY(-1px);
-}
+.platform:hover:not(.unavailable) { background: var(--code-bg); }
 .platform.unavailable { opacity: 0.4; cursor: default; }
 .os-icon {
   display: inline-flex;
@@ -144,9 +136,7 @@ h1 {
 }
 .platforms-note a { color: inherit; }
 
-section {
-  margin-top: 3rem;
-}
+section { margin-top: 3rem; }
 section h2 {
   font-size: 1rem;
   font-weight: 600;
@@ -159,11 +149,13 @@ section p { margin: 0 0 1rem; max-width: 36em; }
 section p.muted { color: var(--fg-muted); font-size: 0.9rem; }
 section ul { margin: 0 0 1rem; padding-left: 1.25rem; }
 section li { margin-bottom: 0.4rem; }
+
+/* Block-level code (the verification commands). Soft shade + radius,
+ * no border. */
 section pre {
   background: var(--code-bg);
-  border: 1px solid var(--code-border);
   border-radius: 8px;
-  padding: 0.75rem 1rem;
+  padding: 0.85rem 1rem;
   overflow-x: auto;
   font-size: 0.85rem;
   margin: 0 0 1rem;
@@ -173,23 +165,23 @@ section pre code {
   background: transparent;
   padding: 0;
 }
+
+/* Inline code — just monospace + slightly muted. No border, no
+ * background — it should read as inline emphasis, not a badge. */
 code {
-  background: var(--code-bg);
-  border: 1px solid var(--code-border);
-  border-radius: 4px;
-  padding: 0.05rem 0.35rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.88em;
+  font-size: 0.92em;
+  color: var(--fg);
 }
 
 footer {
   margin-top: 6rem;
   padding-top: 1.5rem;
-  border-top: 1px solid var(--line);
   font-size: 0.85rem;
   color: var(--fg-muted);
   display: flex;
   gap: 1.5rem;
   flex-wrap: wrap;
 }
-footer a { color: inherit; }
+footer a { color: inherit; text-decoration: none; }
+footer a:hover { color: var(--fg); }
