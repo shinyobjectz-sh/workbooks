@@ -150,11 +150,11 @@ Consolidates the multi-party threats from `SECURITY_MODEL_MULTIPARTY.md` and the
 | 10 | Audit log tampering by broker insider (A9) | Audit entries chained at append (each `prev_hash` = previous row's `self_hash`; `self_hash` = sha256 of canonical-JSON payload). `GET /v1/workbooks/:id/audit/verify` re-walks the chain and surfaces breaks (deletion → `prev_hash_mismatch`; UPDATE → `self_hash_mismatch`). Authors run before regulator export; recipients with cached copies of issued entries spot-check the broker's record on demand. Defense against a broker-with-signing-key re-chaining is recipients caching their own copies (out of scope for this endpoint, lives in C1.9 / future). | ✅ (verifier); deferred (D1 trigger to enforce append-only — out of scope, D1's SQLite-flavor trigger story varies + the verifier already detects all the same conditions) | C9.6 (closed) |
 | 11 | MITM between daemon and broker (A2) | TLS via webpki-roots; `broker.signal.ml` + HSTS. *Long-term: cert pinning.* | ✅ (TLS); ⚠ (no pinning) | (post-MVP) |
 | 12 | Broker key-release endpoint as enumeration oracle | Workbook ids are 128-bit random; auth required; uniform 401 on miss. | ✅ | core-1fi.1.7 |
-| 13 | Daemon-host PII / secret leak via logs | `secrecy::SecretBox` for cleartext; `secrecy::SecretString` for bearer; `secrets-policy` for outbound proxy. **Hardening: PII redaction sweep across broker + daemon log lines.** | ⚠ | **C9.8** (`core-l6n.8`) |
-| 14 | SSRF — `return_to` to internal network range | `safeReturnTo` in broker. Currently allows any localhost; **hardening: deny private-network ranges (10/8, 172.16/12, 192.168/16, 169.254/16, ::1, fc00::/7) other than literal 127.0.0.1**. | ⚠ | **C9.9** (`core-l6n.9`) |
+| 13 | Daemon-host PII / secret leak via logs | `secrecy::SecretBox` for cleartext; `secrecy::SecretString` for bearer; `secrets-policy` for outbound proxy. Broker log lines use `sub_hash` (4-byte sha256 prefix) for correlation rather than the raw WorkOS sub; full identity stays in the (signed, append-only) audit log. Email never appears in operational logs — only `email_domain` in the audit log. | ✅ | C9.8 (closed) |
+| 14 | SSRF / open-redirect via `return_to` | `safeReturnTo` allows ONLY (a) the broker's own host:port, or (b) hostname literally `localhost` / `127.0.0.1` with port ≥ 1024. Rejects: non-http(s) schemes, userinfo in URL, all private network IP literals (10/8, 172.16/12, 192.168/16, 169.254/16, ::1, fc00::/7) since none match the allowed hostnames, IPv6 loopback `[::1]`, and `127.x.x.x` other than `127.0.0.1` literal. WHATWG URL parser canonicalizes obfuscated forms (`0x7f000001`, `2130706433`) to `127.0.0.1` so the hostname-equality check covers those. Rejected requests log at warn for visibility. | ✅ | C9.9 (closed) |
 | 15 | Stolen unlocked recipient laptop with cached lease (A6) | Cached lease + wrapped DEK in OS keychain. **Today no local-presence check.** **Hardening: Touch ID / Hello / polkit gesture before unwrap.** | ❌ | **C9.5** (`core-l6n.5`) |
 | 16 | Cleartext lands on disk during open | Cleartext lives in `secrecy::SecretBox` only; never written to disk; not persisted to `sessions.tsv`. Daemon restart forces re-auth. | ✅ | core-1fi.1.8 |
-| 17 | Constant-time secret compare violations (timing-leak class) | KV lookups for sessions / daemon codes are hash-keyed. **Hardening: audit any `===` on secret material in the broker's TS code.** | ⚠ | **C9.2** (`core-l6n.2`) |
+| 17 | Constant-time secret compare violations (timing-leak class) | KV lookups for sessions / daemon codes are hash-keyed (constant-time on hit/miss). WebCrypto handles all signing/AEAD operations (constant-time internally). Sweep on 2026-05-02 found NO existing JS `===` on secret material across the broker — all comparisons are on lengths, public identifiers (WorkOS sub for ownership checks), or constants. `util.ts:timingSafeEqual` exists as scaffolding for any future code that needs it. | ✅ | C9.2 (closed) |
 | 18 | Embedded credential entry in workbook envelope (phishing surface for daemon-less recipients) | Architecture: never embed credential entry — the envelope only carries a redirect button to `auth.workbooks.sh`. WebAuthn origin-binding makes embedded passkey enrollment worthless anyway. Memory: [`project_auth_portal_direction.md`](#) — Pattern C. | ✅ accepted | core-1fi.1.12 (C1.14) |
 | 19 | Untrusted UI claims provenance (sender / chain) (A7) | Pre-auth shell verifies the C2PA chain in-browser via WebCrypto **before** rendering any signed claim. Failure = visible "modified after signing" warning, never silent display. | ❌ (design only — depends on C8) | core-8 (C8.3) |
 | 20 | OIDC token forgery by compromised WorkOS (A10) | End-to-end JWKS verification at broker on every token rather than trusting WorkOS-resigned claims. | ⚠ (designed; JWKS verification ticket open separately if not implemented) | (verify in code, file ticket if missing) |
@@ -184,14 +184,14 @@ Each row maps to a `bd` ticket under `core-l6n`. Filed P0 = blocks production; P
 | Ticket | Title | Priority | Blocks |
 |---|---|---|---|
 | `core-l6n.1` | C9.1 Sealed-box DEK transport | **P0** | ✅ closed |
-| `core-l6n.2` | C9.2 Constant-time secret compares | P1 | — |
+| `core-l6n.2` | C9.2 Constant-time secret compares | P1 | ✅ closed (no findings; helper added) |
 | `core-l6n.3` | C9.3 Memory-only KEK in production | **P0** | ✅ closed |
 | `core-l6n.4` | C9.4 Author key registration (broker side) | P1 | ✅ closed (C8.3 still owns in-browser verifier) |
 | `core-l6n.5` | C9.5 Local-credential gate (cached lease open) | **P0** | C1.9 |
 | `core-l6n.6` | C9.6 Append-only audit log (verifier) | P1 | ✅ closed |
 | `core-l6n.7` | C9.7 THREAT_MODEL.md | **P0** | this doc |
-| `core-l6n.8` | C9.8 Logging hygiene (PII redaction) | P1 | — |
-| `core-l6n.9` | C9.9 SSRF guard tightening | P1 | — |
+| `core-l6n.8` | C9.8 Logging hygiene (PII redaction) | P1 | ✅ closed |
+| `core-l6n.9` | C9.9 SSRF guard tightening | P1 | ✅ closed |
 
 **Deferred (filed but not P0/P1) — accepted gaps documented for transparency:**
 
