@@ -114,6 +114,51 @@ for target in "${TARGETS[@]}"; do
 done
 
 echo
+echo "[release] building per-arch installer ZIPs..."
+# Each ZIP contains the bare binary + Install.command, both signed
+# with Developer ID Application. macOS auto-extracts ZIPs on
+# download from Safari, so the user lands on a folder with a
+# double-clickable installer instead of a bare Mach-O that opens
+# in TextEdit.
+INSTALL_CMD_SRC="$HERE/Install.command"
+if [ ! -f "$INSTALL_CMD_SRC" ]; then
+  echo "  Install.command missing at $INSTALL_CMD_SRC — skipping installer ZIPs"
+else
+  for target in "${TARGETS[@]}"; do
+    PKG_DIR="$STAGE_DIR/Workbooks-$target"
+    mkdir -p "$PKG_DIR"
+    cp "$STAGE_DIR/workbooksd-$target" "$PKG_DIR/workbooksd-$target"
+    cp "$INSTALL_CMD_SRC" "$PKG_DIR/Install.command"
+    chmod +x "$PKG_DIR/workbooksd-$target" "$PKG_DIR/Install.command"
+
+    # Sign the .command so Gatekeeper allows double-click. Bare
+    # shell scripts are signable as flat-file payload.
+    codesign --sign "$APPLE_DEV_ID_NAME" \
+             --options runtime \
+             --timestamp \
+             --force \
+             "$PKG_DIR/Install.command"
+
+    # Zip the folder. ditto preserves the executable bits.
+    ZIP_OUT="$STAGE_DIR/workbooksd-$target.zip"
+    ( cd "$STAGE_DIR" && ditto -c -k --keepParent "Workbooks-$target" "$ZIP_OUT" )
+
+    # Notarize the ZIP so Gatekeeper has a stapleable ticket.
+    echo "[release] notarizing $ZIP_OUT…"
+    xcrun notarytool submit "$ZIP_OUT" \
+      --key "$APPLE_NOTARY_KEY_PATH" \
+      --key-id "$APPLE_NOTARY_KEY_ID" \
+      --issuer "$APPLE_NOTARY_ISSUER" \
+      --wait
+    # ZIPs themselves can't be stapled, but the .command inside
+    # carries the codesign signature; Gatekeeper will check the
+    # ticket online at first run.
+
+    echo "[release] → $ZIP_OUT ($(wc -c < "$ZIP_OUT") bytes)"
+  done
+fi
+
+echo
 echo "[release] generating sha256.txt..."
 ( cd "$STAGE_DIR" && shasum -a 256 workbooksd-* | sort > sha256.txt )
 cat "$STAGE_DIR/sha256.txt"
@@ -138,9 +183,21 @@ if command -v gh >/dev/null 2>&1; then
       --title "workbooksd $VERSION" \
       --notes "Locally signed + notarized macOS binaries (Apple Developer ID).
 
+**For end users**: download \`workbooksd-aarch64-apple-darwin.zip\`
+(Apple Silicon) or \`workbooksd-x86_64-apple-darwin.zip\` (Intel),
+double-click to extract, then double-click \`Install.command\`. The
+installer sets up the daemon, LaunchAgent, and .workbook.html file
+association; double-clicking any .workbook.html file afterwards
+opens it through the daemon.
+
+**For automation / homebrew / install scripts**: the bare \`workbooksd-*\`
+binaries are notarized and self-contained — drop them in your PATH.
+
 SHA-256 manifest: \`/dl/sha256.txt\` on workbooks.sh — redirects here.
 
-Linux + Windows binaries: cut a \`workbooksd-v$VERSION\` tag (no \`release-\` prefix) to trigger CI builds via .github/workflows/workbooksd-release.yml." \
+Linux + Windows binaries: cut a \`workbooksd-v$VERSION\` tag (no
+\`release-\` prefix) to trigger CI builds via
+.github/workflows/workbooksd-release.yml." \
       "$STAGE_DIR"/workbooksd-* "$STAGE_DIR/sha256.txt"
   fi
 else
