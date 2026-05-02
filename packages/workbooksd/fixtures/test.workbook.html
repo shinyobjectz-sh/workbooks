@@ -50,7 +50,10 @@
   // Detect the daemon and confirm we were loaded with a token URL.
   let daemonOk = false;
   try {
-    const r = await fetch('http://127.0.0.1:47119/health', { cache: 'no-store' });
+    // Same-origin fetch — works regardless of which port the
+    // daemon randomized to at startup. We're already loaded from
+    // the daemon's origin (location.host), so /health is just there.
+    const r = await fetch('/health', { cache: 'no-store' });
     daemonOk = r.ok;
   } catch {}
   const boundToDaemon = location.protocol === 'http:' && location.pathname.startsWith('/wb/');

@@ -75,7 +75,21 @@ use tokio::sync::Mutex;
 use tower_http::cors::{Any, CorsLayer};
 
 const BIND_HOST: &str = "127.0.0.1";
-pub(crate) const BIND_PORT: u16 = 47119;
+/// Port chosen at startup. Bound to 127.0.0.1:0 to get an
+/// OS-assigned ephemeral port; written to runtime.json so the
+/// `workbooksd open` subcommand and the test harness can find
+/// the running daemon. Predictable ports (the old 47119) made
+/// targeted local-host attacks easier — a malicious page on
+/// the same machine could pre-script /open POSTs against a
+/// known address. Random ports widen the search space and pair
+/// nicely with the require_daemon_origin same-port check.
+pub(crate) static BOUND_PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+/// Public accessor — panics if called before the listener bind
+/// (which only happens in unit-test contexts that don't spin
+/// the daemon at all).
+pub(crate) fn bound_port() -> u16 {
+    *BOUND_PORT.get().expect("daemon listener has not bound yet")
+}
 const WORKBOOK_SUFFIX: &str = ".workbook.html";
 const MAX_SESSIONS: usize = 1000;
 const OPEN_BURST: f64 = 10.0;
@@ -227,6 +241,59 @@ impl SessionStore {
         Self { cap, map: HashMap::new() }
     }
 
+    /// Restore from a previous run's sessions.json (token → path
+    /// pairs). Per-session ephemerals (secrets_policy, permissions,
+    /// workbook_id, recently_seeded) intentionally start empty —
+    /// they get re-populated on the next /wb/<token>/ GET. Sessions
+    /// whose underlying file no longer exists are dropped silently.
+    fn restore_from_disk(&mut self) -> usize {
+        let path = sessions_state_path();
+        let Ok(body) = std::fs::read_to_string(&path) else { return 0; };
+        let mut count = 0;
+        for line in body.lines() {
+            let mut parts = line.splitn(2, '\t');
+            let (token, file_path) = match (parts.next(), parts.next()) {
+                (Some(t), Some(p)) if !t.is_empty() => (t, PathBuf::from(p)),
+                _ => continue,
+            };
+            if !file_path.exists() { continue; }
+            self.map.insert(token.to_string(), Session {
+                path: file_path,
+                last_access: Instant::now(),
+                secrets_policy: None,
+                permissions: None,
+                workbook_id: None,
+                recently_seeded: HashMap::new(),
+            });
+            count += 1;
+        }
+        count
+    }
+
+    /// Persist (token, path) pairs to sessions.json. Called after
+    /// every insert so a daemon restart finds the same tokens valid
+    /// — kills the "unknown token" surprise on browser refresh.
+    /// TSV format because tokens are 32-hex and paths are utf8 paths
+    /// without tabs in any sane filesystem; JSON would need escaping.
+    fn persist_to_disk(&self) -> Result<(), String> {
+        let path = sessions_state_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        }
+        let mut body = String::with_capacity(self.map.len() * 64);
+        for (token, sess) in &self.map {
+            body.push_str(token);
+            body.push('\t');
+            body.push_str(&sess.path.display().to_string());
+            body.push('\n');
+        }
+        let tmp = path.with_extension("tsv.tmp");
+        std::fs::write(&tmp, &body).map_err(|e| format!("write tmp: {e}"))?;
+        std::fs::rename(&tmp, &path).map_err(|e| format!("rename: {e}"))?;
+        Ok(())
+    }
+
     /// Insert a fresh token. If we're at cap, evict the entry with the
     /// oldest last_access (touch-LRU). Returns the evicted token, if any,
     /// for logging.
@@ -251,6 +318,9 @@ impl SessionStore {
             workbook_id: None,
             recently_seeded: HashMap::new(),
         });
+        if let Err(e) = self.persist_to_disk() {
+            eprintln!("[workbooksd] sessions.tsv persist failed: {e}");
+        }
         evicted
     }
 
@@ -396,6 +466,17 @@ async fn daemon_main() {
 
     let state = AppState::default();
 
+    // Restore the persisted session map BEFORE binding so the
+    // first /wb/<token>/ GET after a restart finds its token.
+    // The browser tab kept open across the restart now resolves
+    // instead of 404'ing with "unknown token".
+    {
+        let restored = state.sessions.lock().await.restore_from_disk();
+        if restored > 0 {
+            eprintln!("[workbooksd] restored {restored} session(s) from sessions.tsv");
+        }
+    }
+
     // Permissive CORS for /health AND /open — both are public-facing
     // endpoints that file:// pages need to call. /health is the
     // presence probe; /open is what self-redirecting workbooks POST
@@ -454,18 +535,142 @@ async fn daemon_main() {
         .route("/ledger/:workbook_id", get(ledger_by_id_handler))
         .with_state(state);
 
-    let addr: SocketAddr = format!("{BIND_HOST}:{BIND_PORT}").parse().unwrap();
-    let listener = match tokio::net::TcpListener::bind(addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("[workbooksd] cannot bind {addr}: {e}");
-            eprintln!("[workbooksd] is another instance already running?");
-            std::process::exit(1);
+    // Bind preference order:
+    //   1. The previous run's port (from runtime.json) if it's
+    //      still free. Keeps URLs in already-open browser tabs
+    //      valid across daemon restarts — the tab's URL has the
+    //      old port, persisted sessions have the old token, both
+    //      now resolve.
+    //   2. 127.0.0.1:0 — kernel-assigned ephemeral.
+    // The previous port isn't observable to a malicious page
+    // (it's filesystem state in ~/Library/Application Support),
+    // so re-binding it doesn't reintroduce the predictability
+    // issue .17 fixed. Only same-machine processes that can
+    // already read runtime.json see it.
+    let listener = {
+        let mut bound: Option<tokio::net::TcpListener> = None;
+        if let Some(prev) = read_runtime_port() {
+            let prev_addr: SocketAddr = format!("{BIND_HOST}:{prev}").parse().unwrap();
+            if let Ok(l) = tokio::net::TcpListener::bind(prev_addr).await {
+                eprintln!("[workbooksd] reusing previous port {prev}");
+                bound = Some(l);
+            }
+        }
+        match bound {
+            Some(l) => l,
+            None => {
+                let addr: SocketAddr = format!("{BIND_HOST}:0").parse().unwrap();
+                match tokio::net::TcpListener::bind(addr).await {
+                    Ok(l) => l,
+                    Err(e) => {
+                        eprintln!("[workbooksd] cannot bind {addr}: {e}");
+                        eprintln!("[workbooksd] is another instance already running?");
+                        std::process::exit(1);
+                    }
+                }
+            }
         }
     };
-    eprintln!("[workbooksd] listening on http://{addr}");
+    let bound = listener.local_addr().expect("bound listener has local_addr").port();
+    BOUND_PORT.set(bound).expect("BOUND_PORT initialized once");
+    if let Err(e) = write_runtime_json(bound) {
+        // Non-fatal — the daemon still serves; the helper just
+        // can't be discovered out-of-process. Log and proceed.
+        eprintln!("[workbooksd] runtime.json write failed: {e}");
+    }
+    eprintln!("[workbooksd] listening on http://{BIND_HOST}:{bound}");
     axum::serve(listener, app).await.expect("serve");
 }
+
+/// Write the runtime port + pid to a small JSON file so the
+/// `workbooksd open` subcommand and external test harnesses can
+/// discover the running daemon. Plays the role of a pid-file +
+/// port advertisement; one of the few stable handshake surfaces
+/// across daemon restarts. Atomic via tmp+rename.
+fn write_runtime_json(port: u16) -> Result<(), String> {
+    let dir = runtime_state_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    let path = dir.join("runtime.json");
+    let body = format!(
+        r#"{{"port":{port},"pid":{pid},"host":"{BIND_HOST}"}}"#,
+        pid = std::process::id(),
+    );
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, &body).map_err(|e| format!("write tmp: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("rename: {e}"))?;
+    Ok(())
+}
+
+/// `~/Library/Application Support/sh.workbooks.workbooksd/` on
+/// macOS, equivalent on Linux. Already used by the audit log and
+/// approvals.json — runtime.json is one more file in the same dir.
+pub(crate) fn runtime_state_dir() -> PathBuf {
+    let mut p: PathBuf = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    #[cfg(target_os = "macos")]
+    { p.push("Library/Application Support/sh.workbooks.workbooksd"); }
+    #[cfg(not(target_os = "macos"))]
+    { p.push(".local/share/workbooksd"); }
+    p
+}
+
+/// Read the running daemon's port from runtime.json. Used by the
+/// `workbooksd open <path>` subcommand and any out-of-process
+/// caller that needs the live address. Returns None if the file
+/// doesn't exist or doesn't parse — caller surfaces a friendly
+/// "is the daemon running?" message.
+pub(crate) fn read_runtime_port() -> Option<u16> {
+    let path = runtime_state_dir().join("runtime.json");
+    let body = std::fs::read_to_string(&path).ok()?;
+    // Tiny ad-hoc parser — avoids pulling serde_json in for one
+    // integer field. Format is `{"port":N,...}`.
+    let after = body.split("\"port\":").nth(1)?;
+    let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
+/// Path of the persisted session map. Token-keyed TSV (token \t
+/// path \n) so a daemon restart can hand back the same URL the
+/// browser tab is still showing — kills the "unknown token" error
+/// on refresh after a launchd-restart / sleep-wake / log-out cycle.
+fn sessions_state_path() -> PathBuf {
+    runtime_state_dir().join("sessions.tsv")
+}
+
+/// Page shown when serve_workbook receives a token it doesn't
+/// recognize even after the sessions.tsv restore. Most often hit
+/// by an old bookmark to a previous machine's workbook URL; the
+/// guidance is "open the file again from Finder."
+const UNKNOWN_TOKEN_HTML: &str = r#"<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Session expired</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="darkreader-lock">
+<style>
+:root { color-scheme: light dark; --bg:#fff; --fg:#0a0a0a; --muted:#555; --line:#ececec; --code:#f5f5f5; }
+@media (prefers-color-scheme: dark) { :root { --bg:#0a0a0a; --fg:#f5f5f5; --muted:#9a9a9a; --line:#1c1c1c; --code:#141414; } }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg);
+       font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+       line-height:1.55; }
+main { max-width:560px; margin:0 auto; padding:6rem 1.5rem; }
+h1 { font-size:1.6rem; margin:0 0 0.6rem; letter-spacing:-0.01em; }
+p  { color:var(--muted); margin:0 0 1rem; }
+code { background:var(--code); padding:0.05rem 0.4rem; border-radius:4px;
+       font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.92em; color:var(--fg); }
+.meta { font-size:0.85rem; color:var(--muted); padding-top:1.5rem; border-top:1px solid var(--line); margin-top:2rem; }
+</style></head>
+<body><main>
+<h1>This session has expired.</h1>
+<p>The token in this URL doesn't match any open workbook on this machine.
+That usually means the workbook was opened on a different computer, the
+daemon's session storage was cleared, or you bookmarked a URL from a
+previous run.</p>
+<p>To open it again: find the <code>.workbook.html</code> file in Finder
+and double-click it. The daemon will hand you a fresh URL.</p>
+<p class="meta">workbooks daemon · <a href="https://workbooks.sh/" style="color:inherit">workbooks.sh</a></p>
+</main></body></html>"#;
 
 // ── handlers ────────────────────────────────────────────────────────
 
@@ -537,7 +742,7 @@ async fn open_handler(
     if let Some(old) = evicted {
         eprintln!("[workbooksd] sessions at cap; evicted oldest token {old}");
     }
-    let url = format!("http://{BIND_HOST}:{BIND_PORT}/wb/{token}/");
+    let url = format!("http://{BIND_HOST}:{}/wb/{token}/", bound_port());
     (StatusCode::OK, axum::Json(OpenResp { token, url })).into_response()
 }
 
@@ -550,7 +755,25 @@ async fn serve_workbook(
     AxPath(token): AxPath<String>,
 ) -> impl IntoResponse {
     let Some(path) = state.sessions.lock().await.touch(&token) else {
-        return (StatusCode::NOT_FOUND, "unknown token").into_response();
+        // Browser-facing GET — render a friendly HTML page instead
+        // of the bare "unknown token" string the API endpoints
+        // return. This is hit when the user's tab is older than the
+        // current sessions.tsv (file moved, daemon storage cleared,
+        // or an unrelated workbook's URL pasted into the address
+        // bar). Audit-log it so we can tell genuine staleness from
+        // restart-recovery cases.
+        audit_log(
+            std::path::Path::new("(unknown)"),
+            "serve-unknown-token",
+            Some(&token),
+            None,
+        );
+        return (
+            StatusCode::NOT_FOUND,
+            [("content-type", "text/html; charset=utf-8")],
+            UNKNOWN_TOKEN_HTML,
+        )
+            .into_response();
     };
     match tokio::fs::read_to_string(&path).await {
         Ok(html) => {
@@ -750,7 +973,7 @@ async fn save_workbook(
 /// is fine because /wb/<token>/ (the document load) is the entry
 /// point, not the attack surface.
 pub(crate) fn require_daemon_origin(headers: &HeaderMap) -> Result<(), Response> {
-    let expected = format!("http://{BIND_HOST}:{BIND_PORT}");
+    let expected = format!("http://{BIND_HOST}:{}", bound_port());
     match headers.get("origin").and_then(|v| v.to_str().ok()) {
         Some(o) if o == expected => Ok(()),
         // No Origin = same-origin GET / programmatic fetch with
@@ -1891,16 +2114,25 @@ fn ensure_daemon_up() -> Result<bool, String> {
     Ok(false)
 }
 
+/// Look up the running daemon's port via runtime.json. Returns
+/// a friendly error if the file is missing or stale — the
+/// caller (`workbooksd open <path>` etc.) re-checks after spawn.
+fn discover_running_port() -> Result<u16, String> {
+    read_runtime_port()
+        .ok_or_else(|| "no runtime.json — daemon not running".to_string())
+}
+
 fn http_get_health() -> Result<(), String> {
     use std::io::{Read, Write};
+    let port = discover_running_port()?;
     let mut s = std::net::TcpStream::connect_timeout(
-        &format!("{BIND_HOST}:{BIND_PORT}").parse().unwrap(),
+        &format!("{BIND_HOST}:{port}").parse().unwrap(),
         std::time::Duration::from_millis(300),
     )
     .map_err(|e| format!("connect: {e}"))?;
     s.set_read_timeout(Some(std::time::Duration::from_millis(500))).ok();
     let req = format!(
-        "GET /health HTTP/1.0\r\nHost: {BIND_HOST}:{BIND_PORT}\r\nConnection: close\r\n\r\n"
+        "GET /health HTTP/1.0\r\nHost: {BIND_HOST}:{port}\r\nConnection: close\r\n\r\n"
     );
     s.write_all(req.as_bytes()).map_err(|e| format!("write: {e}"))?;
     let mut resp = String::new();
@@ -1914,14 +2146,15 @@ fn http_get_health() -> Result<(), String> {
 
 fn http_post_loopback(path: &str, content_type: &str, body: &[u8]) -> Result<String, String> {
     use std::io::{Read, Write};
+    let port = discover_running_port()?;
     let mut s = std::net::TcpStream::connect_timeout(
-        &format!("{BIND_HOST}:{BIND_PORT}").parse().unwrap(),
+        &format!("{BIND_HOST}:{port}").parse().unwrap(),
         std::time::Duration::from_secs(2),
     )
     .map_err(|e| format!("connect: {e}"))?;
     s.set_read_timeout(Some(std::time::Duration::from_secs(5))).ok();
     let req_head = format!(
-        "POST {path} HTTP/1.0\r\nHost: {BIND_HOST}:{BIND_PORT}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "POST {path} HTTP/1.0\r\nHost: {BIND_HOST}:{port}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     s.write_all(req_head.as_bytes()).map_err(|e| format!("write head: {e}"))?;

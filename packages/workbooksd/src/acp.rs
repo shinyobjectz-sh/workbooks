@@ -532,7 +532,7 @@ async fn run_relay(
     // wb-fetch reads these to authenticate /proxy calls.
     cmd.env(
         "WORKBOOKS_DAEMON_URL",
-        format!("http://127.0.0.1:{}", crate::BIND_PORT),
+        format!("http://127.0.0.1:{}", crate::bound_port()),
     );
     cmd.env("WORKBOOKS_TOKEN", &token);
 

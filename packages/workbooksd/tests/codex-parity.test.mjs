@@ -21,7 +21,8 @@ import { spawnSync } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { which } from "bun";
 
-const DAEMON = "http://127.0.0.1:47119";
+import { daemonUrl } from "./_runtime.mjs";
+const DAEMON = daemonUrl();
 const ORIGIN = DAEMON;
 const ADAPTER = "codex";
 

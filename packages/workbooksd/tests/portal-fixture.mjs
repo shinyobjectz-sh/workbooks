@@ -15,7 +15,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Buffer } from "node:buffer";
 
-const DAEMON = "http://127.0.0.1:47119";
+import { daemonUrl } from "./_runtime.mjs";
+const DAEMON = daemonUrl();
 const ORIGIN = DAEMON;
 const FIXTURE_DIR = process.env.FIXTURE_DIR ??
   mkdtempSync(join(tmpdir(), "workbooks-portal-fixture-"));
