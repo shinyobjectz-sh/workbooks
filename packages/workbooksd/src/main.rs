@@ -193,13 +193,17 @@ struct Session {
     /// in data terms but a visible flicker in the iframe player.
     /// Entries within `SEED_ECHO_WINDOW_MS` are skipped.
     recently_seeded: HashMap<String, Instant>,
-    /// In-memory cleartext for sealed (studio-v1) workbooks. When
-    /// present, /wb/<token>/ serves these bytes instead of reading
-    /// from `path` — the file on disk is the encrypted envelope, and
-    /// cleartext deliberately never lands on disk. Held in
-    /// `secrecy::SecretBox` so it's zeroized on drop and can't be
-    /// formatted into a log line.
-    cleartext: Option<secrecy::SecretBox<Vec<u8>>>,
+    /// In-memory cleartext per unlocked view for sealed (studio-v1)
+    /// workbooks. When non-empty, /wb/<token>/ serves the chosen
+    /// view's bytes instead of reading from `path` — the file on
+    /// disk is the encrypted envelope, and cleartext deliberately
+    /// never lands on disk. Each value is held in `secrecy::SecretBox`
+    /// so it's zeroized on drop and can't be formatted into a log
+    /// line. C2 multi-view: a recipient with full + redacted policy
+    /// gets both decrypted; the daemon serves whichever view the URL
+    /// path selects (default = first alphabetical, or "default" if
+    /// the workbook publishes one).
+    cleartexts: HashMap<String, secrecy::SecretBox<Vec<u8>>>,
     /// Lease metadata returned by the broker — JWT (opaque to the
     /// daemon today, will be verified by future client code) and the
     /// epoch-second `exp`. Set together with `cleartext`. Surfaced
@@ -291,7 +295,7 @@ impl SessionStore {
                 // sealed-workbook auth state is process-lifetime only.
                 // A daemon restart forces re-authentication; C1.9
                 // (lease cache) will provide an offline grace window.
-                cleartext: None,
+                cleartexts: HashMap::new(),
                 lease_jwt: None,
                 lease_exp: None,
                 sealed_identity_sub: None,
@@ -349,7 +353,7 @@ impl SessionStore {
             permissions: None,
             workbook_id: None,
             recently_seeded: HashMap::new(),
-            cleartext: None,
+            cleartexts: HashMap::new(),
             lease_jwt: None,
             lease_exp: None,
             sealed_identity_sub: None,
@@ -371,7 +375,7 @@ impl SessionStore {
         &mut self,
         token: String,
         path: PathBuf,
-        cleartext: secrecy::SecretBox<Vec<u8>>,
+        cleartexts: HashMap<String, secrecy::SecretBox<Vec<u8>>>,
         lease_jwt: String,
         lease_exp: i64,
         identity_sub: String,
@@ -396,7 +400,7 @@ impl SessionStore {
             permissions: None,
             workbook_id: None,
             recently_seeded: HashMap::new(),
-            cleartext: Some(cleartext),
+            cleartexts,
             lease_jwt: Some(lease_jwt),
             lease_exp: Some(lease_exp),
             sealed_identity_sub: Some(identity_sub),
@@ -413,20 +417,49 @@ impl SessionStore {
         evicted
     }
 
-    /// Look up the in-memory cleartext for a sealed workbook token.
-    /// Returns a fresh SecretBox holding a copy of the bytes — caller
-    /// drops it when serve completes and the bytes are zeroized.
-    /// None for plaintext workbooks (caller should fall back to a
-    /// disk read of `path`).
+    /// Look up the in-memory cleartext for a specific view of a sealed
+    /// workbook token. Returns a fresh SecretBox holding a copy of the
+    /// bytes — caller drops it when serve completes and the bytes are
+    /// zeroized. None for plaintext workbooks or for view ids the
+    /// recipient didn't unlock (caller falls back to disk read or
+    /// returns an error).
     pub(crate) fn cleartext_for(
         &mut self,
         token: &str,
+        view_id: &str,
     ) -> Option<secrecy::SecretBox<Vec<u8>>> {
         let s = self.map.get_mut(token)?;
         s.last_access = Instant::now();
-        let stored = s.cleartext.as_ref()?;
+        let stored = s.cleartexts.get(view_id)?;
         let copy: Vec<u8> = secrecy::ExposeSecret::expose_secret(stored).clone();
         Some(secrecy::SecretBox::new(Box::new(copy)))
+    }
+
+    /// Pick the default view to serve when no view id is in the URL.
+    /// Priority: explicit "default" if unlocked, then alphabetically
+    /// first unlocked view. Returns None when the session has no
+    /// cleartexts (plaintext workbook → caller reads from disk).
+    pub(crate) fn default_view_id(&mut self, token: &str) -> Option<String> {
+        let s = self.map.get_mut(token)?;
+        s.last_access = Instant::now();
+        if s.cleartexts.contains_key("default") {
+            return Some("default".to_string());
+        }
+        let mut keys: Vec<&String> = s.cleartexts.keys().collect();
+        keys.sort();
+        keys.first().map(|k| (*k).clone())
+    }
+
+    /// List all unlocked view ids for a token, sorted. Used by the
+    /// view-picker UI when more than one view is unlocked.
+    pub(crate) fn unlocked_views(&mut self, token: &str) -> Vec<String> {
+        let Some(s) = self.map.get_mut(token) else {
+            return Vec::new();
+        };
+        s.last_access = Instant::now();
+        let mut keys: Vec<String> = s.cleartexts.keys().cloned().collect();
+        keys.sort();
+        keys
     }
 
     /// Look up a token's bound path and refresh its last_access stamp.
@@ -1040,16 +1073,23 @@ async fn open_sealed(
     .await
     .map_err(|e| format!("broker auth: {e}"))?;
 
-    // C1: single "default" view per workbook. C2 will iterate the
-    // unlocked set and produce a multi-view in-memory layout.
-    let key = auth
-        .keys
-        .iter()
-        .find(|k| k.view_id == "default")
-        .ok_or_else(|| "broker did not release a 'default' view key".to_string())?;
-
-    let cleartext = envelope::decrypt_view(&env, "default", &key.dek)
-        .map_err(|e| format!("decrypt failed: {e}"))?;
+    // C2: iterate the unlocked view set. Broker returns one DEK per
+    // view the recipient's policy allows. Decrypt each into its own
+    // SecretBox; the daemon stores all of them and serves whichever
+    // the URL path selects (default is the alphabetically-first
+    // unlocked view, or "default" if it's in the set).
+    if auth.keys.is_empty() {
+        return Err("broker released zero view keys (policy denied all views)".to_string());
+    }
+    let mut cleartexts: HashMap<String, secrecy::SecretBox<Vec<u8>>> =
+        HashMap::with_capacity(auth.keys.len());
+    for key in &auth.keys {
+        let cleartext = envelope::decrypt_view(&env, &key.view_id, &key.dek)
+            .map_err(|e| format!("decrypt failed for view {}: {e}", key.view_id))?;
+        cleartexts.insert(key.view_id.clone(), cleartext);
+    }
+    let unlocked_view_ids: Vec<&str> =
+        cleartexts.keys().map(|s| s.as_str()).collect();
 
     audit_log(
         &path,
@@ -1057,11 +1097,17 @@ async fn open_sealed(
         Some(&auth.sub),
         Some(&auth.email),
     );
+    eprintln!(
+        "[workbooksd] sealed-open ok: {} view{} unlocked ({})",
+        cleartexts.len(),
+        if cleartexts.len() == 1 { "" } else { "s" },
+        unlocked_view_ids.join(", "),
+    );
 
     let evicted = state.sessions.lock().await.insert_sealed(
         token,
         path,
-        cleartext,
+        cleartexts,
         auth.lease_jwt,
         auth.lease_exp,
         auth.sub,
@@ -1104,10 +1150,20 @@ async fn serve_workbook(
     };
 
     // Sealed-workbook fast path: serve from in-memory cleartext when
-    // it's there. The encrypted file on disk stays sealed. We pull
-    // out the SecretBox, copy the bytes into a String for response
-    // building, and drop the SecretBox so the inner copy zeroizes.
-    let sealed_html = state.sessions.lock().await.cleartext_for(&token);
+    // it's there. The encrypted file on disk stays sealed. C2 multi-
+    // view: pick the default view (or alphabetically-first unlocked).
+    // /wb/<token>/<view_id>/ explicit selection lands in a follow-up;
+    // for now any unlocked view of a multi-view workbook serves at
+    // /wb/<token>/. We pull the SecretBox, copy the bytes into a
+    // String for response building, and drop the SecretBox so the
+    // inner copy zeroizes.
+    let sealed_html = {
+        let mut s = state.sessions.lock().await;
+        match s.default_view_id(&token) {
+            Some(view) => s.cleartext_for(&token, &view),
+            None => None,
+        }
+    };
     let html_from_sealed = sealed_html.and_then(|sb| {
         let bytes: Vec<u8> = secrecy::ExposeSecret::expose_secret(&sb).clone();
         String::from_utf8(bytes).ok()
